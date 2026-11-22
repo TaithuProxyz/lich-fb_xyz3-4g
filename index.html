@@ -10,9 +10,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Lịch FB">
     <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#090d16">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23090d16'/><text y='.9em' font-size='70' x='12'>💡</text></svg>">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💡</text></svg>">
+    <link rel="apple-touch-icon" href="./icon.png?v=3">
+    <link rel="icon" type="image/png" href="./icon.png?v=3">
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
@@ -88,22 +87,13 @@
         </div>
 
         <!-- Thanh Tab Động Nhiều Ngày -->
-        <div id="tabsContainer" class="flex items-center border-b border-slate-700 mb-2.5 gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            <!-- Render tự động bằng JS -->
-        </div>
+        <div id="tabsContainer" class="flex items-center border-b border-slate-700 mb-2.5 gap-1.5 overflow-x-auto no-scrollbar pb-0.5"></div>
 
         <!-- Vùng Bảng có nút Thêm/Bớt Hàng ở rìa trái & Cột ở rìa trên -->
         <div id="gridWrapper" class="relative pt-5 pl-5">
-            <!-- Thanh nút Cột phía trên -->
             <div id="colInsertBar" class="relative h-5 -mt-5 mb-0.5 select-none"></div>
-
-            <!-- Thanh nút Hàng bên trái -->
             <div id="rowInsertBar" class="absolute left-0 top-5 bottom-0 w-5 select-none"></div>
-
-            <!-- Grid động theo số cột -->
-            <div id="pagesGrid" class="grid gap-2" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
-                <!-- Render bằng JS -->
-            </div>
+            <div id="pagesGrid" class="grid gap-2" style="grid-template-columns: repeat(4, minmax(0, 1fr));"></div>
         </div>
     </div>
 
@@ -114,9 +104,7 @@
                 <h3 id="gridModalTitle" class="text-xs font-bold text-white"></h3>
                 <button onclick="closeGridActionModal()" class="text-slate-400 hover:text-white text-xs">✕</button>
             </div>
-            <div id="gridModalOptions" class="flex flex-col gap-2">
-                <!-- Render động các nút Thêm / Xóa tại vị trí đang chọn -->
-            </div>
+            <div id="gridModalOptions" class="flex flex-col gap-2"></div>
         </div>
     </div>
 
@@ -184,11 +172,22 @@
             databaseURL: "https://lich-dang-fb-default-rtdb.asia-southeast1.firebasedatabase.app/"
         };
         firebase.initializeApp(firebaseConfig);
-        const dbRef = firebase.database().ref('fb_schedule_data');
+        const db = firebase.database();
+        const dbRef = db.ref('fb_schedule_data');
 
         const LOCAL_BACKUP_KEY = 'fb_schedule_data_v17';
         let draggedIndex = null;
         let isInitialLoadDone = false;
+        let isSavingLocal = false;
+
+        // Ngắt socket khi ẩn tab / chuyển app để tiết kiệm kết nối & data ngầm
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                db.goOffline();
+            } else {
+                db.goOnline();
+            }
+        });
 
         function isSlotEmpty(slot) {
             return slot === null || slot === undefined || slot.isEmpty === true;
@@ -241,7 +240,6 @@
                     id: 1,
                     name: 'Kiến Thức Thú Cưng',
                     defaultTimes: ['19:30'],
-                    defaultActives: [true],
                     schedule: {}
                 }
             ]
@@ -265,19 +263,11 @@
             const container = document.getElementById('mainContainer');
             const viewportMeta = document.getElementById('viewportMeta');
 
-            if (grid) {
-                grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
-            }
-            if (badge) {
-                badge.innerText = `${rows} hàng × ${cols} cột`;
-            }
+            if (grid) grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+            if (badge) badge.innerText = `${rows} hàng × ${cols} cột`;
             const idealWidth = Math.max(540, cols * 180 + 24);
-            if (container) {
-                container.style.maxWidth = `${idealWidth}px`;
-            }
-            if (viewportMeta) {
-                viewportMeta.setAttribute('content', `width=${idealWidth}`);
-            }
+            if (container) container.style.maxWidth = `${idealWidth}px`;
+            if (viewportMeta) viewportMeta.setAttribute('content', `width=${idealWidth}`);
         }
 
         function setSyncBadge(status, text) {
@@ -293,37 +283,97 @@
             el.innerText = text;
         }
 
-        function saveData() {
-            delete appData.date;
-            delete appData.pages;
-            appData.cols = getCols();
-            appData.slots = appData.slots.map(s => isSlotEmpty(s) ? createEmptySlot() : s);
-            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(appData));
-            
+        function buildCompactPayload() {
+            const todayStr = getTodayStr();
+            const cleanSlots = appData.slots.map(s => {
+                if (isSlotEmpty(s)) return createEmptySlot();
+                const cleanSchedule = {};
+                if (s.schedule) {
+                    Object.keys(s.schedule).forEach(dKey => {
+                        if (dKey >= todayStr && s.schedule[dKey] && s.schedule[dKey][0]) {
+                            const item = s.schedule[dKey][0];
+                            if (item.status && item.status !== 'none') {
+                                cleanSchedule[dKey] = [{
+                                    status: item.status,
+                                    expected: item.expected || (s.defaultTimes && s.defaultTimes[0]) || '19:30',
+                                    time: item.time || ''
+                                }];
+                            }
+                        }
+                    });
+                }
+                return {
+                    id: s.id,
+                    name: s.name,
+                    defaultTimes: s.defaultTimes || ['19:30'],
+                    schedule: cleanSchedule
+                };
+            });
+
+            return {
+                cols: getCols(),
+                slots: cleanSlots
+            };
+        }
+
+        function saveLocalCache() {
+            const payload = buildCompactPayload();
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(payload));
+        }
+
+        // GHI TỪNG NHÁNH NHỎ (PATCH): Chỉ gửi đúng field thay đổi (~50 bytes)
+        function patchCloud(updatesObj) {
+            saveLocalCache();
+            if (!updatesObj || Object.keys(updatesObj).length === 0) return;
+
+            isSavingLocal = true;
             setSyncBadge('saving', '🔄 Đang lưu...');
-            dbRef.set(appData)
+            dbRef.update(updatesObj)
                 .then(() => setSyncBadge('online', '🟢 Đã đồng bộ Cloud'))
-                .catch(() => setSyncBadge('error', '🔴 Lỗi mạng'));
+                .catch(() => setSyncBadge('error', '🔴 Lỗi mạng'))
+                .finally(() => {
+                    setTimeout(() => { isSavingLocal = false; }, 250);
+                });
+        }
+
+        // GHI TOÀN BỘ: Chỉ dùng khi thêm/xóa/kéo thả thay đổi cấu trúc mảng slots
+        function saveFullData() {
+            const payload = buildCompactPayload();
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(payload));
+            
+            isSavingLocal = true;
+            setSyncBadge('saving', '🔄 Đang lưu...');
+            dbRef.set(payload)
+                .then(() => setSyncBadge('online', '🟢 Đã đồng bộ Cloud'))
+                .catch(() => setSyncBadge('error', '🔴 Lỗi mạng'))
+                .finally(() => {
+                    setTimeout(() => { isSavingLocal = false; }, 250);
+                });
         }
 
         function autoUpdateScheduledToPosted() {
             const todayStr = getTodayStr();
             const nowTime = getCurrentTimeStr();
-            let hasChanged = false;
+            const updates = {};
 
-            appData.slots.forEach(p => {
+            appData.slots.forEach((p, idx) => {
                 if (isSlotEmpty(p) || !p.schedule || !p.schedule[todayStr]) return;
 
-                const slot = p.schedule[todayStr][0];
-                if (slot && slot.status === 'scheduled' && slot.expected && nowTime >= slot.expected) {
-                    slot.status = 'posted';
-                    slot.time = slot.expected;
-                    hasChanged = true;
+                const tSlot = p.schedule[todayStr][0];
+                if (tSlot && tSlot.status === 'scheduled' && tSlot.expected && nowTime >= tSlot.expected) {
+                    tSlot.status = 'posted';
+                    tSlot.time = tSlot.expected;
+                    updates[`slots/${idx}/schedule/${todayStr}/0`] = {
+                        status: 'posted',
+                        expected: tSlot.expected,
+                        time: tSlot.expected
+                    };
                 }
             });
 
+            const hasChanged = Object.keys(updates).length > 0;
             if (hasChanged) {
-                saveData();
+                patchCloud(updates);
             }
             return hasChanged;
         }
@@ -331,16 +381,17 @@
         function migrateAndCleanData(shouldSave = true) {
             const todayStr = getTodayStr();
             const tomorrowStr = addDays(todayStr, 1);
-            let modified = false;
+            let needFullSave = false;
+            const pastCleanupUpdates = {};
 
             if (!appData.cols) {
                 appData.cols = 4;
-                modified = true;
+                needFullSave = true;
             }
 
             if (!Array.isArray(appData.slots)) {
                 appData.slots = Object.values(appData.slots || {});
-                modified = true;
+                needFullSave = true;
             }
 
             appData.slots = appData.slots.map(p => {
@@ -349,46 +400,52 @@
                 return p;
             });
 
-            appData.slots.forEach(p => {
+            appData.slots.forEach((p, idx) => {
                 if (isSlotEmpty(p)) return;
 
                 if (!p.defaultTimes) {
                     p.defaultTimes = [
                         (p.today && p.today[0]) ? p.today[0].expected : '19:30'
                     ];
-                    p.defaultActives = [
-                        (p.today && p.today[0]) ? p.today[0].active !== false : true
-                    ];
                     if (p.today) p.schedule[todayStr] = [p.today[0]];
                     if (p.tomorrow) p.schedule[tomorrowStr] = [p.tomorrow[0]];
                     delete p.today;
                     delete p.tomorrow;
-                    modified = true;
+                    needFullSave = true;
                 }
 
+                // Tự động xóa mọi ngày trước Hôm nay bằng patch null cực nhẹ
                 Object.keys(p.schedule).forEach(dateKey => {
                     if (dateKey < todayStr) {
                         delete p.schedule[dateKey];
-                        modified = true;
+                        pastCleanupUpdates[`slots/${idx}/schedule/${dateKey}`] = null;
                     }
                 });
             });
 
             const autoPosted = autoUpdateScheduledToPosted();
-            if (modified && shouldSave && !autoPosted) {
-                saveData();
+            if (shouldSave) {
+                if (needFullSave) {
+                    saveFullData();
+                } else if (Object.keys(pastCleanupUpdates).length > 0 && !autoPosted) {
+                    patchCloud(pastCleanupUpdates);
+                }
             }
         }
 
-        function getPageDaySlot(page, dateStr) {
+        function readPageDaySlot(page, dateStr) {
+            const t1 = (page.defaultTimes && page.defaultTimes[0]) || '19:30';
+            if (page.schedule && page.schedule[dateStr] && page.schedule[dateStr][0]) {
+                return page.schedule[dateStr][0];
+            }
+            return { status: 'none', expected: t1, time: '' };
+        }
+
+        function ensurePageDaySlot(page, dateStr) {
             if (!page.schedule) page.schedule = {};
             if (!page.schedule[dateStr] || !page.schedule[dateStr][0]) {
                 const t1 = (page.defaultTimes && page.defaultTimes[0]) || '19:30';
-                const a1 = page.defaultActives ? page.defaultActives[0] !== false : true;
-
-                page.schedule[dateStr] = [
-                    { status: 'none', expected: t1, time: '', active: a1 }
-                ];
+                page.schedule[dateStr] = [{ status: 'none', expected: t1, time: '' }];
             }
             return page.schedule[dateStr][0];
         }
@@ -403,7 +460,7 @@
                     const diff = getDayDiff(todayStr, dateKey);
                     if (diff > maxOffset && p.schedule[dateKey][0]) {
                         const s = p.schedule[dateKey][0];
-                        if (s.status !== 'none') {
+                        if (s.status && s.status !== 'none') {
                             maxOffset = diff;
                         }
                     }
@@ -457,7 +514,7 @@
                 appData.slots.forEach(p => {
                     if (!isSlotEmpty(p) && p.schedule && p.schedule[t.dateStr] && p.schedule[t.dateStr][0]) {
                         const s = p.schedule[t.dateStr][0];
-                        if (s.active !== false && s.status !== 'none') scheduledCount++;
+                        if (s.status && s.status !== 'none') scheduledCount++;
                     }
                 });
 
@@ -481,7 +538,6 @@
             container.innerHTML = html;
         }
 
-        // --- XỬ LÝ MENU 3 GẠCH CỦA TỪNG THẺ ---
         function toggleCardMenu(e, index) {
             e.stopPropagation();
             const targetMenu = document.getElementById(`card-menu-${index}`);
@@ -497,12 +553,10 @@
             document.querySelectorAll('.card-dropdown-menu').forEach(m => m.classList.add('hidden'));
         });
 
-        // --- BẢNG CHỌN THÊM / BỚT HÀNG & CỘT Ở MÉP BẢNG ---
         function renderEdgeInsertButtons() {
             const cols = getCols();
             const rows = getRowsCount();
 
-            // 1. Thanh nút Cột ở mép trên (từ 0 đến cols)
             const colBar = document.getElementById('colInsertBar');
             let colHtml = '';
             for (let c = 0; c <= cols; c++) {
@@ -515,7 +569,6 @@
             }
             colBar.innerHTML = colHtml;
 
-            // 2. Thanh nút Hàng ở mép trái: tính tọa độ thực tế theo từng hàng trong grid
             const rowBar = document.getElementById('rowInsertBar');
             const grid = document.getElementById('pagesGrid');
             const cards = grid ? grid.children : [];
@@ -553,9 +606,7 @@
             const start = rowIndex * cols;
             for (let c = 0; c < cols; c++) {
                 const idx = start + c;
-                if (idx < appData.slots.length && !isSlotEmpty(appData.slots[idx])) {
-                    return false;
-                }
+                if (idx < appData.slots.length && !isSlotEmpty(appData.slots[idx])) return false;
             }
             return true;
         }
@@ -563,9 +614,7 @@
         function isColEmpty(colIndex) {
             const cols = getCols();
             for (let i = colIndex; i < appData.slots.length; i += cols) {
-                if (!isSlotEmpty(appData.slots[i])) {
-                    return false;
-                }
+                if (!isSlotEmpty(appData.slots[i])) return false;
             }
             return true;
         }
@@ -671,23 +720,20 @@
 
             const insertPos = Math.min(rowIndex * cols, appData.slots.length);
             const newRowSlots = [];
-            for (let i = 0; i < cols; i++) {
-                newRowSlots.push(createEmptySlot());
-            }
+            for (let i = 0; i < cols; i++) newRowSlots.push(createEmptySlot());
 
             appData.slots.splice(insertPos, 0, ...newRowSlots);
             closeGridActionModal();
-            saveData();
+            saveFullData();
             renderPages();
         }
 
         function deleteRowAt(rowIndex) {
             if (getRowsCount() <= 1 || !isRowEmpty(rowIndex)) return;
             const cols = getCols();
-            const start = rowIndex * cols;
-            appData.slots.splice(start, cols);
+            appData.slots.splice(rowIndex * cols, cols);
             closeGridActionModal();
-            saveData();
+            saveFullData();
             renderPages();
         }
 
@@ -700,9 +746,7 @@
             if (padded.length === 0) {
                 for (let i = 0; i < oldCols; i++) padded.push(createEmptySlot());
             } else {
-                while (padded.length % oldCols !== 0) {
-                    padded.push(createEmptySlot());
-                }
+                while (padded.length % oldCols !== 0) padded.push(createEmptySlot());
             }
 
             const rows = padded.length / oldCols;
@@ -717,7 +761,7 @@
             appData.cols = newCols;
             appData.slots = newSlots;
             closeGridActionModal();
-            saveData();
+            saveFullData();
             renderPages();
         }
 
@@ -727,9 +771,7 @@
             const newCols = oldCols - 1;
 
             const padded = [...appData.slots];
-            while (padded.length % oldCols !== 0) {
-                padded.push(createEmptySlot());
-            }
+            while (padded.length % oldCols !== 0) padded.push(createEmptySlot());
 
             const rows = padded.length / oldCols;
             const newSlots = [];
@@ -742,10 +784,9 @@
             appData.cols = newCols;
             appData.slots = newSlots;
             closeGridActionModal();
-            saveData();
+            saveFullData();
             renderPages();
         }
-        // ------------------------------------------
 
         function renderPages() {
             applyGridLayout();
@@ -781,7 +822,7 @@
                             const temp = appData.slots[draggedIndex];
                             appData.slots[draggedIndex] = appData.slots[index];
                             appData.slots[index] = temp;
-                            saveData();
+                            saveFullData();
                             renderPages();
                         }
                     });
@@ -819,12 +860,12 @@
                             const temp = appData.slots[draggedIndex];
                             appData.slots[draggedIndex] = appData.slots[index];
                             appData.slots[index] = temp;
-                            saveData();
+                            saveFullData();
                             renderPages();
                         }
                     });
 
-                    const slot = getPageDaySlot(p, currentSelectedDate);
+                    const slot = readPageDaySlot(p, currentSelectedDate);
                     let bulbClass = 'text-slate-600 opacity-50';
                     let bgBox = 'border border-slate-700 bg-darkBg/60';
                     let statusText = 'Chưa đăng';
@@ -881,35 +922,54 @@
 
         function toggleSlotStatus(pageId, dateStr) {
             const isToday = (dateStr === getTodayStr());
-            const page = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
-            if (!page) return;
+            const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+            if (pageIndex === -1) return;
+            const page = appData.slots[pageIndex];
 
-            const slot = getPageDaySlot(page, dateStr);
+            const currentSlot = readPageDaySlot(page, dateStr);
 
-            if (slot.status === 'none') {
+            if (currentSlot.status === 'none') {
                 if (isToday) {
+                    const slot = ensurePageDaySlot(page, dateStr);
                     const now = new Date();
+                    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
                     slot.status = 'posted';
-                    slot.time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-                    slot.active = true;
-                    saveData();
+                    slot.time = timeStr;
+                    patchCloud({
+                        [`slots/${pageIndex}/schedule/${dateStr}/0`]: {
+                            status: 'posted',
+                            expected: slot.expected,
+                            time: timeStr
+                        }
+                    });
                     renderTabs();
                     renderPages();
                 } else {
                     openScheduleModal(page, dateStr);
                 }
-            } else if (slot.status === 'scheduled' && isToday) {
+            } else if (currentSlot.status === 'scheduled' && isToday) {
+                const slot = ensurePageDaySlot(page, dateStr);
                 const now = new Date();
+                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
                 slot.status = 'posted';
-                slot.time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-                saveData();
+                slot.time = timeStr;
+                patchCloud({
+                    [`slots/${pageIndex}/schedule/${dateStr}/0`]: {
+                        status: 'posted',
+                        expected: slot.expected,
+                        time: timeStr
+                    }
+                });
                 renderTabs();
                 renderPages();
             } else {
                 if (confirm("Xác nhận hoàn tác trạng thái bài đăng này?")) {
-                    slot.status = 'none';
-                    slot.time = '';
-                    saveData();
+                    if (page.schedule && page.schedule[dateStr]) {
+                        delete page.schedule[dateStr];
+                    }
+                    patchCloud({
+                        [`slots/${pageIndex}/schedule/${dateStr}`]: null
+                    });
                     renderTabs();
                     renderPages();
                 }
@@ -952,17 +1012,23 @@
             const startDate = document.getElementById('schedStartDate').value;
             const daysCount = parseInt(document.getElementById('schedDaysInput').value, 10);
 
-            const page = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
-            if (!page || !startDate || daysCount < 1) return;
+            const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+            if (pageIndex === -1 || !startDate || daysCount < 1) return;
+            const page = appData.slots[pageIndex];
 
+            const updates = {};
             for (let i = 0; i < daysCount; i++) {
                 const targetDate = addDays(startDate, i);
-                const daySlot = getPageDaySlot(page, targetDate);
-                daySlot.active = true;
+                const daySlot = ensurePageDaySlot(page, targetDate);
                 daySlot.status = 'scheduled';
+                updates[`slots/${pageIndex}/schedule/${targetDate}/0`] = {
+                    status: 'scheduled',
+                    expected: daySlot.expected,
+                    time: ''
+                };
             }
 
-            saveData();
+            patchCloud(updates);
             closeScheduleModal();
             renderTabs();
             renderPages();
@@ -971,7 +1037,9 @@
         function turnSlotIntoEmpty(index) {
             if (confirm("Chuyển ô này thành khoảng trống?")) {
                 appData.slots[index] = createEmptySlot();
-                saveData();
+                patchCloud({
+                    [`slots/${index}`]: createEmptySlot()
+                });
                 renderTabs();
                 renderPages();
             }
@@ -979,63 +1047,82 @@
 
         function removeEmptySlot(index) {
             appData.slots.splice(index, 1);
-            saveData();
+            saveFullData();
             renderPages();
         }
 
         function fillEmptySlot(index) {
             const name = prompt("Nhập tên Fanpage cho ô này:");
             if (name && name.trim() !== "") {
-                appData.slots[index] = {
+                const newObj = {
                     id: Date.now(),
                     name: name.trim(),
                     defaultTimes: ['19:30'],
-                    defaultActives: [true],
                     schedule: {}
                 };
-                saveData();
+                appData.slots[index] = newObj;
+                patchCloud({
+                    [`slots/${index}`]: newObj
+                });
                 renderPages();
             }
         }
 
         function editPageName(pageId) {
-            let targetPage = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
-            if (!targetPage) return;
+            const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+            if (pageIndex === -1) return;
+            const targetPage = appData.slots[pageIndex];
 
             const newName = prompt("Nhập tên mới cho Fanpage:", targetPage.name);
             if (newName && newName.trim() !== "") {
                 targetPage.name = newName.trim();
-                saveData();
+                patchCloud({
+                    [`slots/${pageIndex}/name`]: targetPage.name
+                });
                 renderPages();
             }
         }
 
+        // Đổi giờ: cập nhật cả defaultTimes[0] (mọi ngày tương lai) lẫn toàn bộ ngày >= currentSelectedDate
         function updateExpectedTime(pageId, newTime) {
-            appData.slots.forEach(p => {
-                if (!isSlotEmpty(p) && p.id === pageId) {
-                    if (!p.defaultTimes) p.defaultTimes = ['19:30'];
-                    p.defaultTimes[0] = newTime;
+            const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+            if (pageIndex === -1) return;
+            const p = appData.slots[pageIndex];
 
-                    if (p.schedule) {
-                        Object.keys(p.schedule).forEach(dKey => {
-                            if (dKey >= currentSelectedDate && p.schedule[dKey][0]) {
-                                p.schedule[dKey][0].expected = newTime;
-                            }
-                        });
+            if (!p.defaultTimes) p.defaultTimes = ['19:30'];
+            p.defaultTimes[0] = newTime;
+
+            const updates = {
+                [`slots/${pageIndex}/defaultTimes/0`]: newTime
+            };
+
+            if (p.schedule) {
+                Object.keys(p.schedule).forEach(dKey => {
+                    if (dKey >= currentSelectedDate && p.schedule[dKey][0]) {
+                        p.schedule[dKey][0].expected = newTime;
+                        if (p.schedule[dKey][0].status && p.schedule[dKey][0].status !== 'none') {
+                            updates[`slots/${pageIndex}/schedule/${dKey}/0/expected`] = newTime;
+                        }
                     }
-                    saveData();
-                }
-            });
+                });
+            }
+
+            patchCloud(updates);
             autoUpdateScheduledToPosted();
             renderPages();
         }
 
         function deletePage(pageId) {
             if (confirm("Xóa hẳn Page này khỏi danh sách?")) {
-                appData.slots = appData.slots.map(p => (!isSlotEmpty(p) && p.id === pageId) ? createEmptySlot() : p);
-                saveData();
-                renderTabs();
-                renderPages();
+                const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+                if (pageIndex !== -1) {
+                    appData.slots[pageIndex] = createEmptySlot();
+                    patchCloud({
+                        [`slots/${pageIndex}`]: createEmptySlot()
+                    });
+                    renderTabs();
+                    renderPages();
+                }
             }
         }
 
@@ -1050,26 +1137,32 @@
             const emptyIndex = appData.slots.findIndex(s => isSlotEmpty(s));
             const newPageObj = {
                 id: Date.now(),
-                name: name,
+                name: name.trim(),
                 defaultTimes: [time1],
-                defaultActives: [true],
                 schedule: {}
             };
 
             if (emptyIndex !== -1) {
                 appData.slots[emptyIndex] = newPageObj;
+                patchCloud({
+                    [`slots/${emptyIndex}`]: newPageObj
+                });
             } else {
+                const newIndex = appData.slots.length;
                 appData.slots.push(newPageObj);
+                patchCloud({
+                    [`slots/${newIndex}`]: newPageObj
+                });
             }
 
-            saveData();
             renderPages();
             closeAddModal();
             document.getElementById('newPageName').value = '';
         }
 
         function exportJSON() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appData, null, 2));
+            const payload = buildCompactPayload();
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
             const dlAnchorElem = document.createElement('a');
             dlAnchorElem.setAttribute("href", dataStr);
             dlAnchorElem.setAttribute("download", `fb_schedule_${getTodayStr()}.json`);
@@ -1086,12 +1179,10 @@
                     try {
                         const parsed = JSON.parse(e.target.result);
                         if (parsed && (parsed.slots || parsed.pages)) {
-                            if (parsed.pages && !parsed.slots) {
-                                parsed.slots = parsed.pages;
-                            }
+                            if (parsed.pages && !parsed.slots) parsed.slots = parsed.pages;
                             appData = parsed;
                             migrateAndCleanData(false);
-                            saveData();
+                            saveFullData();
                             renderTabs();
                             renderPages();
                             alert("Khôi phục dữ liệu từ file JSON và đồng bộ Cloud thành công!");
@@ -1114,13 +1205,13 @@
         updateHeaderDate();
 
         dbRef.on('value', (snapshot) => {
+            if (isSavingLocal) return;
+
             const cloudData = snapshot.val();
             setSyncBadge('online', '🟢 Đã đồng bộ Cloud');
 
             if (cloudData && (cloudData.slots || cloudData.pages)) {
-                if (cloudData.pages && !cloudData.slots) {
-                    cloudData.slots = cloudData.pages;
-                }
+                if (cloudData.pages && !cloudData.slots) cloudData.slots = cloudData.pages;
                 appData = cloudData;
                 migrateAndCleanData(true);
                 renderTabs();
@@ -1128,12 +1219,10 @@
             } else if (!isInitialLoadDone) {
                 const localSaved = localStorage.getItem(LOCAL_BACKUP_KEY);
                 if (localSaved) {
-                    try {
-                        appData = JSON.parse(localSaved);
-                    } catch (e) {}
+                    try { appData = JSON.parse(localSaved); } catch (e) {}
                 }
                 migrateAndCleanData(false);
-                saveData();
+                saveFullData();
                 renderTabs();
                 renderPages();
             }
