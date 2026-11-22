@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" id="viewportMeta" content="width=740">
+    <title>Quản Lý Lịch Đăng Page Facebook</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkBg: '#090d16'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .neon-green { filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.9)); }
+        .neon-blue { filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.9)); }
+        .page-card { cursor: grab; }
+        .page-card:active { cursor: grabbing; }
+        .page-card.dragging { opacity: 0.4; border-style: dashed; border-color: #ef4444; }
+        .empty-slot { border: 2px dashed rgba(100, 116, 139, 0.3); transition: all 0.2s; }
+        .empty-slot.drag-over { border-color: #ef4444; background-color: rgba(239, 68, 68, 0.05); }
+        .clickable-box { cursor: pointer; transition: all 0.15s ease; }
+        .clickable-box:hover { filter: brightness(1.15); }
+        
+        input[type="time"]::-webkit-calendar-picker-indicator {
+            display: none;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .insert-btn {
+            opacity: 0.55;
+            transition: all 0.15s ease;
+        }
+        .insert-btn:hover {
+            opacity: 1;
+            transform: scale(1.2);
+        }
+    </style>
+</head>
+<body class="bg-darkBg text-slate-100 min-h-screen font-sans antialiased p-2 sm:p-3">
+    <div id="mainContainer" class="w-full max-w-[740px] px-2 mx-auto transition-all duration-200">
+        <!-- Header -->
+        <div class="flex flex-row justify-between items-center mb-2.5 pb-2 border-b border-slate-700 gap-2">
+            <div>
+                <h1 class="text-sm font-bold tracking-wide text-white flex items-center gap-1.5">
+                    💡 Quản Lý Lịch Đăng Page Facebook
+                    <span id="syncStatus" class="text-[10px] font-normal px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700">⏳ Đang kết nối...</span>
+                </h1>
+                <p id="currentDateDisplay" class="text-slate-300 text-[10px] mt-0.5 font-medium"></p>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap">
+                <button onclick="exportJSON()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-0.5 rounded text-[11px] font-semibold transition flex items-center gap-1 shadow">
+                    📥 Xuất JSON
+                </button>
+                <button onclick="document.getElementById('importFile').click()" class="bg-amber-600 hover:bg-amber-500 text-white px-2 py-0.5 rounded text-[11px] font-semibold transition flex items-center gap-1 shadow">
+                    📤 Nhập JSON
+                </button>
+                <input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)">
+
+                <div class="flex items-center bg-slate-800 border border-slate-700 rounded px-2 py-0.5 text-[10px] text-slate-300 gap-1" title="Bấm vào các nút + ở mép trên hoặc mép trái bảng để Thêm/Xóa Hàng & Cột">
+                    <span>Lưới: <b id="gridSizeBadge" class="text-white">4 cột</b></span>
+                </div>
+
+                <button onclick="openAddModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-2 py-0.5 rounded text-[11px] font-semibold transition flex items-center gap-1 shadow">
+                    ➕ Thêm Page
+                </button>
+            </div>
+        </div>
+
+        <!-- Thanh Tab Động Nhiều Ngày -->
+        <div id="tabsContainer" class="flex items-center border-b border-slate-700 mb-2.5 gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            <!-- Render tự động bằng JS -->
+        </div>
+
+        <!-- Vùng Bảng có nút Thêm/Bớt Hàng ở rìa trái & Cột ở rìa trên -->
+        <div id="gridWrapper" class="relative pt-5 pl-5">
+            <!-- Thanh nút Cột phía trên -->
+            <div id="colInsertBar" class="relative h-5 -mt-5 mb-0.5 select-none"></div>
+
+            <!-- Thanh nút Hàng bên trái -->
+            <div id="rowInsertBar" class="absolute left-0 top-5 bottom-0 w-5 select-none"></div>
+
+            <!-- Grid động theo số cột -->
+            <div id="pagesGrid" class="grid gap-2" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+                <!-- Render bằng JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Bảng Chọn Thêm / Bớt Hàng hoặc Cột -->
+    <div id="gridActionModal" class="fixed inset-0 bg-black/75 hidden flex items-center justify-center p-4 z-50" onclick="closeGridActionModal()">
+        <div class="bg-slate-900 border-2 border-slate-600 rounded-xl p-3.5 w-full max-w-[290px] shadow-2xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-2.5 pb-1.5 border-b border-slate-800">
+                <h3 id="gridModalTitle" class="text-xs font-bold text-white"></h3>
+                <button onclick="closeGridActionModal()" class="text-slate-400 hover:text-white text-xs">✕</button>
+            </div>
+            <div id="gridModalOptions" class="flex flex-col gap-2">
+                <!-- Render động các nút Thêm / Xóa tại vị trí đang chọn -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Thêm Page -->
+    <div id="addModal" class="fixed inset-0 bg-black/75 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border-2 border-red-600 rounded-xl p-3 w-full max-w-xs shadow-2xl">
+            <h3 class="text-xs font-bold text-white mb-2">Thêm Fanpage Mới</h3>
+            <form onsubmit="addPage(event)">
+                <div class="mb-2">
+                    <label class="block text-[11px] text-slate-300 mb-1 font-medium">Tên Page</label>
+                    <input type="text" id="newPageName" required placeholder="VD: Kiến Thức Thú Cưng" 
+                        class="w-full bg-darkBg border border-slate-600 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-red-500">
+                </div>
+                <div class="mb-2.5">
+                    <label class="block text-[11px] text-slate-300 mb-1 font-medium">Giờ đăng dự kiến</label>
+                    <input type="time" id="newTime1" value="19:30" step="60" 
+                        class="w-full bg-darkBg border border-slate-600 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-red-500 font-mono">
+                </div>
+                <div class="flex justify-end gap-1.5">
+                    <button type="button" onclick="closeAddModal()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-2 py-1 rounded-md text-[11px] font-semibold">Hủy</button>
+                    <button type="submit" class="bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded-md text-[11px] font-semibold">Lưu</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Chọn Số Ngày Khi Bấm Lên Lịch -->
+    <div id="scheduleDaysModal" class="fixed inset-0 bg-black/75 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border-2 border-blue-500 rounded-xl p-3.5 w-full max-w-[270px] shadow-2xl">
+            <h3 class="text-xs font-bold text-white mb-0.5">🚀 Lên Lịch Bài Đăng</h3>
+            <p id="schedModalInfo" class="text-[11px] text-blue-400 font-semibold mb-3 truncate"></p>
+            
+            <form onsubmit="confirmScheduleDays(event)">
+                <input type="hidden" id="schedPageId">
+                <input type="hidden" id="schedStartDate">
+
+                <label class="block text-[11px] text-slate-300 mb-1.5 font-medium">Số ngày liên tiếp (tính từ ngày đang chọn):</label>
+                
+                <div class="grid grid-cols-5 gap-1.5 mb-2.5" id="quickDaysBtns">
+                    <button type="button" onclick="selectQuickDay(1)" data-day="1" class="quick-day-btn bg-blue-600 text-white border border-blue-400 py-1.5 rounded text-xs font-bold transition">1</button>
+                    <button type="button" onclick="selectQuickDay(2)" data-day="2" class="quick-day-btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 py-1.5 rounded text-xs font-bold transition">2</button>
+                    <button type="button" onclick="selectQuickDay(3)" data-day="3" class="quick-day-btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 py-1.5 rounded text-xs font-bold transition">3</button>
+                    <button type="button" onclick="selectQuickDay(4)" data-day="4" class="quick-day-btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 py-1.5 rounded text-xs font-bold transition">4</button>
+                    <button type="button" onclick="selectQuickDay(5)" data-day="5" class="quick-day-btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 py-1.5 rounded text-xs font-bold transition">5</button>
+                </div>
+
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="text-[11px] text-slate-400 whitespace-nowrap">Hoặc nhập số:</span>
+                    <input type="number" id="schedDaysInput" min="1" max="60" value="1" required oninput="highlightQuickBtn(this.value)"
+                        class="w-full bg-darkBg border border-slate-600 rounded-lg px-2.5 py-1 text-xs text-white font-bold text-center focus:outline-none focus:border-blue-500">
+                    <span class="text-[11px] text-slate-400">ngày</span>
+                </div>
+
+                <div class="flex justify-end gap-1.5 pt-1 border-t border-slate-800">
+                    <button type="button" onclick="closeScheduleModal()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1 rounded-md text-[11px] font-semibold">Hủy</button>
+                    <button type="submit" id="schedConfirmBtn" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-1 rounded-md text-[11px] font-bold shadow">OK</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // --- CẤU HÌNH FIREBASE REALTIME DATABASE ---
+        const firebaseConfig = {
+            databaseURL: "https://lich-dang-fb-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const dbRef = firebase.database().ref('fb_schedule_data');
+
+        const LOCAL_BACKUP_KEY = 'fb_schedule_data_v17';
+        let draggedIndex = null;
+        let isInitialLoadDone = false;
+
+        function isSlotEmpty(slot) {
+            return slot === null || slot === undefined || slot.isEmpty === true;
+        }
+
+        function createEmptySlot() {
+            return { isEmpty: true };
+        }
+
+        function getTodayStr() {
+            return formatDate(new Date());
+        }
+
+        function getCurrentTimeStr() {
+            const now = new Date();
+            return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        }
+
+        function formatDate(d) {
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+
+        function addDays(dateStr, days) {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dateObj = new Date(y, m - 1, d);
+            dateObj.setDate(dateObj.getDate() + days);
+            return formatDate(dateObj);
+        }
+
+        function getDayDiff(fromDateStr, toDateStr) {
+            const [y1, m1, d1] = fromDateStr.split('-').map(Number);
+            const [y2, m2, d2] = toDateStr.split('-').map(Number);
+            const t1 = new Date(y1, m1 - 1, d1).getTime();
+            const t2 = new Date(y2, m2 - 1, d2).getTime();
+            return Math.round((t2 - t1) / (1000 * 3600 * 24));
+        }
+
+        function formatDisplayDate(dateStr) {
+            const [y, m, d] = dateStr.split('-');
+            return `${d}/${m}`;
+        }
+
+        let currentSelectedDate = getTodayStr();
+        let extraTabCount = 2;
+
+        let appData = {
+            cols: 4,
+            slots: [
+                {
+                    id: 1,
+                    name: 'Kiến Thức Thú Cưng',
+                    defaultTimes: ['19:30'],
+                    defaultActives: [true],
+                    schedule: {}
+                }
+            ]
+        };
+
+        function getCols() {
+            const c = parseInt(appData.cols, 10);
+            return (c && c >= 2 && c <= 12) ? c : 4;
+        }
+
+        function getRowsCount() {
+            const cols = getCols();
+            return Math.max(1, Math.ceil(appData.slots.length / cols));
+        }
+
+        function applyGridLayout() {
+            const cols = getCols();
+            const rows = getRowsCount();
+            const grid = document.getElementById('pagesGrid');
+            const badge = document.getElementById('gridSizeBadge');
+            const container = document.getElementById('mainContainer');
+            const viewportMeta = document.getElementById('viewportMeta');
+
+            if (grid) {
+                grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+            }
+            if (badge) {
+                badge.innerText = `${rows} hàng × ${cols} cột`;
+            }
+            const idealWidth = Math.max(540, cols * 180 + 24);
+            if (container) {
+                container.style.maxWidth = `${idealWidth}px`;
+            }
+            if (viewportMeta) {
+                viewportMeta.setAttribute('content', `width=${idealWidth}`);
+            }
+        }
+
+        function setSyncBadge(status, text) {
+            const el = document.getElementById('syncStatus');
+            if (!el) return;
+            if (status === 'online') {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-700/60";
+            } else if (status === 'saving') {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-400 border border-blue-700/60";
+            } else {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-700/60";
+            }
+            el.innerText = text;
+        }
+
+        function saveData() {
+            delete appData.date;
+            delete appData.pages;
+            appData.cols = getCols();
+            appData.slots = appData.slots.map(s => isSlotEmpty(s) ? createEmptySlot() : s);
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(appData));
+            
+            setSyncBadge('saving', '🔄 Đang lưu...');
+            dbRef.set(appData)
+                .then(() => setSyncBadge('online', '🟢 Đã đồng bộ Cloud'))
+                .catch(() => setSyncBadge('error', '🔴 Lỗi mạng'));
+        }
+
+        function autoUpdateScheduledToPosted() {
+            const todayStr = getTodayStr();
+            const nowTime = getCurrentTimeStr();
+            let hasChanged = false;
+
+            appData.slots.forEach(p => {
+                if (isSlotEmpty(p) || !p.schedule || !p.schedule[todayStr]) return;
+
+                const slot = p.schedule[todayStr][0];
+                if (slot && slot.status === 'scheduled' && slot.expected && nowTime >= slot.expected) {
+                    slot.status = 'posted';
+                    slot.time = slot.expected;
+                    hasChanged = true;
+                }
+            });
+
+            if (hasChanged) {
+                saveData();
+            }
+            return hasChanged;
+        }
+
+        function migrateAndCleanData(shouldSave = true) {
+            const todayStr = getTodayStr();
+            const tomorrowStr = addDays(todayStr, 1);
+            let modified = false;
+
+            if (!appData.cols) {
+                appData.cols = 4;
+                modified = true;
+            }
+
+            if (!Array.isArray(appData.slots)) {
+                appData.slots = Object.values(appData.slots || {});
+                modified = true;
+            }
+
+            appData.slots = appData.slots.map(p => {
+                if (isSlotEmpty(p)) return createEmptySlot();
+                if (!p.schedule) p.schedule = {};
+                return p;
+            });
+
+            appData.slots.forEach(p => {
+                if (isSlotEmpty(p)) return;
+
+                if (!p.defaultTimes) {
+                    p.defaultTimes = [
+                        (p.today && p.today[0]) ? p.today[0].expected : '19:30'
+                    ];
+                    p.defaultActives = [
+                        (p.today && p.today[0]) ? p.today[0].active !== false : true
+                    ];
+                    if (p.today) p.schedule[todayStr] = [p.today[0]];
+                    if (p.tomorrow) p.schedule[tomorrowStr] = [p.tomorrow[0]];
+                    delete p.today;
+                    delete p.tomorrow;
+                    modified = true;
+                }
+
+                Object.keys(p.schedule).forEach(dateKey => {
+                    if (dateKey < todayStr) {
+                        delete p.schedule[dateKey];
+                        modified = true;
+                    }
+                });
+            });
+
+            const autoPosted = autoUpdateScheduledToPosted();
+            if (modified && shouldSave && !autoPosted) {
+                saveData();
+            }
+        }
+
+        function getPageDaySlot(page, dateStr) {
+            if (!page.schedule) page.schedule = {};
+            if (!page.schedule[dateStr] || !page.schedule[dateStr][0]) {
+                const t1 = (page.defaultTimes && page.defaultTimes[0]) || '19:30';
+                const a1 = page.defaultActives ? page.defaultActives[0] !== false : true;
+
+                page.schedule[dateStr] = [
+                    { status: 'none', expected: t1, time: '', active: a1 }
+                ];
+            }
+            return page.schedule[dateStr][0];
+        }
+
+        function getActiveDateTabs() {
+            const todayStr = getTodayStr();
+            let maxOffset = extraTabCount - 1;
+
+            appData.slots.forEach(p => {
+                if (isSlotEmpty(p) || !p.schedule) return;
+                Object.keys(p.schedule).forEach(dateKey => {
+                    const diff = getDayDiff(todayStr, dateKey);
+                    if (diff > maxOffset && p.schedule[dateKey][0]) {
+                        const s = p.schedule[dateKey][0];
+                        if (s.status !== 'none') {
+                            maxOffset = diff;
+                        }
+                    }
+                });
+            });
+
+            const tabs = [];
+            for (let i = 0; i <= maxOffset; i++) {
+                const dStr = addDays(todayStr, i);
+                let label = '';
+                if (i === 0) label = `📅 HÔM NAY (${formatDisplayDate(dStr)})`;
+                else if (i === 1) label = `🚀 NGÀY MAI (${formatDisplayDate(dStr)})`;
+                else if (i === 2) label = `📆 NGÀY MỐT (${formatDisplayDate(dStr)})`;
+                else label = `📆 +${i} NGÀY (${formatDisplayDate(dStr)})`;
+
+                tabs.push({ dateStr: dStr, label: label, offset: i });
+            }
+            return tabs;
+        }
+
+        function addMoreDayTab() {
+            const currentTabs = getActiveDateTabs();
+            extraTabCount = currentTabs.length + 1;
+            const newDateStr = addDays(getTodayStr(), extraTabCount - 1);
+            switchTab(newDateStr);
+        }
+
+        function updateHeaderDate() {
+            const now = new Date();
+            document.getElementById('currentDateDisplay').innerText = `Hôm nay: ${now.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}`;
+        }
+
+        function switchTab(dateStr) {
+            currentSelectedDate = dateStr;
+            renderTabs();
+            renderPages();
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('tabsContainer');
+            const tabs = getActiveDateTabs();
+
+            if (!tabs.some(t => t.dateStr === currentSelectedDate)) {
+                currentSelectedDate = tabs[0].dateStr;
+            }
+
+            let html = '';
+            tabs.forEach(t => {
+                const isSelected = t.dateStr === currentSelectedDate;
+                let scheduledCount = 0;
+                appData.slots.forEach(p => {
+                    if (!isSlotEmpty(p) && p.schedule && p.schedule[t.dateStr] && p.schedule[t.dateStr][0]) {
+                        const s = p.schedule[t.dateStr][0];
+                        if (s.active !== false && s.status !== 'none') scheduledCount++;
+                    }
+                });
+
+                const badge = scheduledCount > 0 
+                    ? `<span class="ml-1 px-1.5 py-0.2 rounded-full text-[9px] ${isSelected ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300'}">${scheduledCount}</span>` 
+                    : '';
+
+                const btnClass = isSelected
+                    ? "px-2.5 py-1 text-[11px] font-bold border-b-2 border-blue-500 text-blue-400 whitespace-nowrap flex items-center"
+                    : "px-2.5 py-1 text-[11px] font-bold border-b-2 border-transparent text-slate-300 hover:text-white whitespace-nowrap flex items-center";
+
+                html += `<button onclick="switchTab('${t.dateStr}')" class="${btnClass}">${t.label}${badge}</button>`;
+            });
+
+            html += `
+                <button onclick="addMoreDayTab()" class="ml-1 px-2 py-0.5 text-[10px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-600 whitespace-nowrap" title="Mở thêm tab ngày tiếp theo">
+                    + Ngày
+                </button>
+            `;
+
+            container.innerHTML = html;
+        }
+
+        // --- XỬ LÝ MENU 3 GẠCH CỦA TỪNG THẺ ---
+        function toggleCardMenu(e, index) {
+            e.stopPropagation();
+            const targetMenu = document.getElementById(`card-menu-${index}`);
+            const wasHidden = targetMenu ? targetMenu.classList.contains('hidden') : false;
+
+            document.querySelectorAll('.card-dropdown-menu').forEach(m => m.classList.add('hidden'));
+            if (targetMenu && wasHidden) {
+                targetMenu.classList.remove('hidden');
+            }
+        }
+
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.card-dropdown-menu').forEach(m => m.classList.add('hidden'));
+        });
+
+        // --- BẢNG CHỌN THÊM / BỚT HÀNG & CỘT Ở MÉP BẢNG ---
+        function renderEdgeInsertButtons() {
+            const cols = getCols();
+            const rows = getRowsCount();
+
+            // 1. Thanh nút Cột ở mép trên (từ 0 đến cols)
+            const colBar = document.getElementById('colInsertBar');
+            let colHtml = '';
+            for (let c = 0; c <= cols; c++) {
+                const pct = (c / cols) * 100;
+                colHtml += `
+                    <button onclick="openColActionModal(${c})" title="Thêm hoặc bớt cột tại vị trí này"
+                        style="left: ${pct}%; transform: translateX(-50%);"
+                        class="insert-btn absolute top-0.5 w-4 h-4 rounded-full bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white border border-slate-500 hover:border-blue-300 flex items-center justify-center text-[10px] font-bold shadow cursor-pointer">+</button>
+                `;
+            }
+            colBar.innerHTML = colHtml;
+
+            // 2. Thanh nút Hàng ở mép trái: tính tọa độ thực tế theo từng hàng trong grid
+            const rowBar = document.getElementById('rowInsertBar');
+            const grid = document.getElementById('pagesGrid');
+            const cards = grid ? grid.children : [];
+            let rowHtml = '';
+
+            if (cards.length > 0) {
+                for (let r = 0; r <= rows; r++) {
+                    let topPx = 0;
+                    if (r === 0) {
+                        topPx = 0;
+                    } else if (r === rows) {
+                        const lastRowFirstCard = cards[(rows - 1) * cols];
+                        topPx = lastRowFirstCard ? (lastRowFirstCard.offsetTop + lastRowFirstCard.offsetHeight) : grid.offsetHeight;
+                    } else {
+                        const prevRowCard = cards[(r - 1) * cols];
+                        const nextRowCard = cards[r * cols];
+                        if (prevRowCard && nextRowCard) {
+                            const prevBottom = prevRowCard.offsetTop + prevRowCard.offsetHeight;
+                            topPx = (prevBottom + nextRowCard.offsetTop) / 2;
+                        }
+                    }
+
+                    rowHtml += `
+                        <button onclick="openRowActionModal(${r})" title="Thêm hoặc bớt hàng tại vị trí này"
+                            style="top: ${topPx}px; transform: translateY(-50%);"
+                            class="insert-btn absolute left-0.5 w-4 h-4 rounded-full bg-slate-800 hover:bg-emerald-600 text-slate-200 hover:text-white border border-slate-500 hover:border-emerald-300 flex items-center justify-center text-[10px] font-bold shadow cursor-pointer">+</button>
+                    `;
+                }
+            }
+            rowBar.innerHTML = rowHtml;
+        }
+
+        function isRowEmpty(rowIndex) {
+            const cols = getCols();
+            const start = rowIndex * cols;
+            for (let c = 0; c < cols; c++) {
+                const idx = start + c;
+                if (idx < appData.slots.length && !isSlotEmpty(appData.slots[idx])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function isColEmpty(colIndex) {
+            const cols = getCols();
+            for (let i = colIndex; i < appData.slots.length; i += cols) {
+                if (!isSlotEmpty(appData.slots[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function openRowActionModal(boundaryIdx) {
+            const rows = getRowsCount();
+            const titleEl = document.getElementById('gridModalTitle');
+            const optionsEl = document.getElementById('gridModalOptions');
+
+            let posDesc = boundaryIdx === 0 ? 'Đầu bảng (trên cùng)' : (boundaryIdx === rows ? 'Cuối bảng (dưới cùng)' : `Giữa Hàng ${boundaryIdx} và Hàng ${boundaryIdx + 1}`);
+            titleEl.innerText = `📐 Quản Lý Hàng • ${posDesc}`;
+
+            let html = `
+                <button onclick="insertRowAt(${boundaryIdx})" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow">
+                    ➕ Chèn 1 hàng trống vào đây
+                </button>
+            `;
+
+            const candidateRows = [];
+            if (boundaryIdx > 0) candidateRows.push(boundaryIdx - 1);
+            if (boundaryIdx < rows) candidateRows.push(boundaryIdx);
+
+            if (rows > 1) {
+                html += `<div class="border-t border-slate-800 pt-2 mt-0.5 flex flex-col gap-1.5">`;
+                candidateRows.forEach(rIdx => {
+                    const empty = isRowEmpty(rIdx);
+                    if (empty) {
+                        html += `
+                            <button onclick="deleteRowAt(${rIdx})" class="w-full bg-rose-600/90 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                                🗑️ Xóa Hàng ${rIdx + 1} (đang trống)
+                            </button>
+                        `;
+                    } else {
+                        html += `
+                            <button disabled class="w-full bg-slate-800/70 text-slate-500 border border-slate-700/70 px-3 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1.5 cursor-not-allowed">
+                                🔒 Không thể xóa Hàng ${rIdx + 1} (đang có Page)
+                            </button>
+                        `;
+                    }
+                });
+                html += `</div>`;
+            }
+
+            optionsEl.innerHTML = html;
+            document.getElementById('gridActionModal').classList.remove('hidden');
+        }
+
+        function openColActionModal(boundaryIdx) {
+            const cols = getCols();
+            const titleEl = document.getElementById('gridModalTitle');
+            const optionsEl = document.getElementById('gridModalOptions');
+
+            let posDesc = boundaryIdx === 0 ? 'Đầu bên trái' : (boundaryIdx === cols ? 'Cuối bên phải' : `Giữa Cột ${boundaryIdx} và Cột ${boundaryIdx + 1}`);
+            titleEl.innerText = `📐 Quản Lý Cột • ${posDesc}`;
+
+            let html = '';
+            if (cols < 12) {
+                html += `
+                    <button onclick="insertColumnAt(${boundaryIdx})" class="w-full bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow">
+                        ➕ Chèn 1 cột trống vào đây
+                    </button>
+                `;
+            }
+
+            const candidateCols = [];
+            if (boundaryIdx > 0) candidateCols.push(boundaryIdx - 1);
+            if (boundaryIdx < cols) candidateCols.push(boundaryIdx);
+
+            if (cols > 2) {
+                html += `<div class="border-t border-slate-800 pt-2 mt-0.5 flex flex-col gap-1.5">`;
+                candidateCols.forEach(cIdx => {
+                    const empty = isColEmpty(cIdx);
+                    if (empty) {
+                        html += `
+                            <button onclick="deleteColumnAt(${cIdx})" class="w-full bg-rose-600/90 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                                🗑️ Xóa Cột ${cIdx + 1} (đang trống)
+                            </button>
+                        `;
+                    } else {
+                        html += `
+                            <button disabled class="w-full bg-slate-800/70 text-slate-500 border border-slate-700/70 px-3 py-1.5 rounded-lg text-[11px] flex items-center justify-center gap-1.5 cursor-not-allowed">
+                                🔒 Không thể xóa Cột ${cIdx + 1} (đang có Page)
+                            </button>
+                        `;
+                    }
+                });
+                html += `</div>`;
+            }
+
+            optionsEl.innerHTML = html;
+            document.getElementById('gridActionModal').classList.remove('hidden');
+        }
+
+        function closeGridActionModal() {
+            document.getElementById('gridActionModal').classList.add('hidden');
+        }
+
+        function insertRowAt(rowIndex) {
+            const cols = getCols();
+            while (appData.slots.length % cols !== 0) {
+                appData.slots.push(createEmptySlot());
+            }
+
+            const insertPos = Math.min(rowIndex * cols, appData.slots.length);
+            const newRowSlots = [];
+            for (let i = 0; i < cols; i++) {
+                newRowSlots.push(createEmptySlot());
+            }
+
+            appData.slots.splice(insertPos, 0, ...newRowSlots);
+            closeGridActionModal();
+            saveData();
+            renderPages();
+        }
+
+        function deleteRowAt(rowIndex) {
+            if (getRowsCount() <= 1 || !isRowEmpty(rowIndex)) return;
+            const cols = getCols();
+            const start = rowIndex * cols;
+            appData.slots.splice(start, cols);
+            closeGridActionModal();
+            saveData();
+            renderPages();
+        }
+
+        function insertColumnAt(colIndex) {
+            const oldCols = getCols();
+            if (oldCols >= 12) return;
+            const newCols = oldCols + 1;
+
+            const padded = [...appData.slots];
+            if (padded.length === 0) {
+                for (let i = 0; i < oldCols; i++) padded.push(createEmptySlot());
+            } else {
+                while (padded.length % oldCols !== 0) {
+                    padded.push(createEmptySlot());
+                }
+            }
+
+            const rows = padded.length / oldCols;
+            const newSlots = [];
+
+            for (let r = 0; r < rows; r++) {
+                const rowItems = padded.slice(r * oldCols, (r + 1) * oldCols);
+                rowItems.splice(colIndex, 0, createEmptySlot());
+                newSlots.push(...rowItems);
+            }
+
+            appData.cols = newCols;
+            appData.slots = newSlots;
+            closeGridActionModal();
+            saveData();
+            renderPages();
+        }
+
+        function deleteColumnAt(colIndex) {
+            const oldCols = getCols();
+            if (oldCols <= 2 || !isColEmpty(colIndex)) return;
+            const newCols = oldCols - 1;
+
+            const padded = [...appData.slots];
+            while (padded.length % oldCols !== 0) {
+                padded.push(createEmptySlot());
+            }
+
+            const rows = padded.length / oldCols;
+            const newSlots = [];
+            for (let r = 0; r < rows; r++) {
+                const rowItems = padded.slice(r * oldCols, (r + 1) * oldCols);
+                rowItems.splice(colIndex, 1);
+                newSlots.push(...rowItems);
+            }
+
+            appData.cols = newCols;
+            appData.slots = newSlots;
+            closeGridActionModal();
+            saveData();
+            renderPages();
+        }
+        // ------------------------------------------
+
+        function renderPages() {
+            applyGridLayout();
+            const container = document.getElementById('pagesGrid');
+            container.innerHTML = '';
+
+            if (!appData.slots || appData.slots.length === 0) {
+                container.innerHTML = `<div class="col-span-full text-center py-6 text-slate-400 text-xs font-medium">Chưa có Page nào. Hãy bấm "Thêm Page" hoặc dấu "+" ở mép bảng.</div>`;
+                requestAnimationFrame(renderEdgeInsertButtons);
+                return;
+            }
+
+            const cols = getCols();
+
+            appData.slots.forEach((p, index) => {
+                if (isSlotEmpty(p)) {
+                    const emptyDiv = document.createElement('div');
+                    emptyDiv.className = `empty-slot rounded-lg p-2 min-h-[118px] flex flex-col items-center justify-center gap-1.5 cursor-pointer`;
+                    emptyDiv.innerHTML = `
+                        <span class="text-slate-500 text-[10px] font-medium">Ô trống #${index + 1}</span>
+                        <div class="flex gap-1.5">
+                            <button onclick="fillEmptySlot(${index})" class="bg-blue-600/80 hover:bg-blue-500 text-white px-2 py-0.5 rounded text-[10px]">➕ Thêm</button>
+                            <button onclick="removeEmptySlot(${index})" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded text-[10px]" title="Xóa ô trống">🗑</button>
+                        </div>
+                    `;
+
+                    emptyDiv.addEventListener('dragover', (e) => { e.preventDefault(); emptyDiv.classList.add('drag-over'); });
+                    emptyDiv.addEventListener('dragleave', () => { emptyDiv.classList.remove('drag-over'); });
+                    emptyDiv.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        emptyDiv.classList.remove('drag-over');
+                        if (draggedIndex !== null && draggedIndex !== index) {
+                            const temp = appData.slots[draggedIndex];
+                            appData.slots[draggedIndex] = appData.slots[index];
+                            appData.slots[index] = temp;
+                            saveData();
+                            renderPages();
+                        }
+                    });
+
+                    container.appendChild(emptyDiv);
+                } else {
+                    const card = document.createElement('div');
+                    const row = Math.floor(index / cols);
+                    const col = index % cols;
+                    const isRed = (row + col) % 2 === 0;
+                    const cardBgClass = isRed 
+                        ? 'bg-slate-900 border-2 border-red-500/85 hover:border-red-400' 
+                        : 'bg-slate-800/90 border-2 border-amber-400/85 hover:border-amber-300';
+
+                    card.className = `page-card relative ${cardBgClass} rounded-lg p-2 flex flex-col justify-between transition-all duration-150 shadow-md`;
+                    card.draggable = true;
+                    card.dataset.index = index;
+
+                    card.addEventListener('dragstart', (e) => {
+                        draggedIndex = index;
+                        card.classList.add('dragging');
+                        e.dataTransfer.effectAllowed = 'move';
+                    });
+
+                    card.addEventListener('dragend', () => {
+                        card.classList.remove('dragging');
+                        draggedIndex = null;
+                    });
+
+                    card.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+
+                    card.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        if (draggedIndex !== null && draggedIndex !== index) {
+                            const temp = appData.slots[draggedIndex];
+                            appData.slots[draggedIndex] = appData.slots[index];
+                            appData.slots[index] = temp;
+                            saveData();
+                            renderPages();
+                        }
+                    });
+
+                    const slot = getPageDaySlot(p, currentSelectedDate);
+                    let bulbClass = 'text-slate-600 opacity-50';
+                    let bgBox = 'border border-slate-700 bg-darkBg/60';
+                    let statusText = 'Chưa đăng';
+                    let labelColor = 'text-slate-400';
+
+                    if (slot.status === 'scheduled') {
+                        bulbClass = 'text-blue-400 neon-blue opacity-100';
+                        bgBox = 'border border-blue-400 bg-blue-900/50 shadow-sm shadow-blue-900/50';
+                        statusText = 'Đã lên lịch';
+                        labelColor = 'text-blue-200 font-bold';
+                    } else if (slot.status === 'posted') {
+                        bulbClass = 'text-emerald-400 neon-green opacity-100';
+                        bgBox = 'border border-emerald-400 bg-emerald-900/50 shadow-sm shadow-emerald-900/50';
+                        statusText = `✓ ${slot.time || slot.expected}`;
+                        labelColor = 'text-emerald-200 font-bold';
+                    }
+
+                    const slotHtml = `
+                        <div class="${bgBox} rounded p-1.5 flex flex-col gap-1.5 transition-all duration-200">
+                            <input type="time" value="${slot.expected}" step="60" onchange="updateExpectedTime(${p.id}, this.value)" 
+                                class="w-full bg-darkBg border border-slate-700 rounded px-2 py-1.5 text-sm text-white text-center focus:outline-none focus:border-red-400 font-mono font-extrabold tracking-wider">
+
+                            <div onclick="toggleSlotStatus(${p.id}, '${currentSelectedDate}')" class="clickable-box w-full py-3 px-1.5 bg-darkBg/50 hover:bg-darkBg/90 rounded border border-slate-800 flex items-center justify-center gap-1.5">
+                                <span class="text-base transition-all duration-200 shrink-0 ${bulbClass}">💡</span>
+                                <span class="text-[11px] font-mono leading-tight ${labelColor} whitespace-nowrap">${statusText}</span>
+                            </div>
+                        </div>
+                    `;
+
+                    card.innerHTML = `
+                        <div class="flex flex-col h-full justify-between">
+                            <div class="relative flex items-start gap-1.5 mb-2 pb-1.5 border-b ${isRed ? 'border-red-500/40' : 'border-amber-400/40'}">
+                                <button type="button" onclick="toggleCardMenu(event, ${index})" class="text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] cursor-pointer shrink-0 transition" title="Bấm để Sửa / Xóa | Kéo thẻ để đổi vị trí">☰</button>
+                                
+                                <div id="card-menu-${index}" onclick="event.stopPropagation()" class="card-dropdown-menu hidden absolute left-0 top-6 z-40 bg-slate-900 border border-slate-600 rounded-lg shadow-2xl py-1 w-32 flex flex-col">
+                                    <button type="button" onclick="editPageName(${p.id})" class="w-full text-left px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-slate-800 flex items-center gap-1.5">✏️ Sửa tên</button>
+                                    <button type="button" onclick="turnSlotIntoEmpty(${index})" class="w-full text-left px-2.5 py-1.5 text-[11px] text-amber-300 hover:bg-slate-800 flex items-center gap-1.5">🕳️ Thành ô trống</button>
+                                    <button type="button" onclick="deletePage(${p.id})" class="w-full text-left px-2.5 py-1.5 text-[11px] text-rose-400 hover:bg-slate-800 flex items-center gap-1.5 border-t border-slate-800">🗑 Xóa Page</button>
+                                </div>
+
+                                <h2 class="font-bold text-white text-xs tracking-tight break-words leading-snug flex-1 pt-0.5">${escapeHtml(p.name)}</h2>
+                            </div>
+                            ${slotHtml}
+                        </div>
+                    `;
+                    container.appendChild(card);
+                }
+            });
+
+            requestAnimationFrame(renderEdgeInsertButtons);
+        }
+
+        window.addEventListener('resize', renderEdgeInsertButtons);
+
+        function toggleSlotStatus(pageId, dateStr) {
+            const isToday = (dateStr === getTodayStr());
+            const page = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
+            if (!page) return;
+
+            const slot = getPageDaySlot(page, dateStr);
+
+            if (slot.status === 'none') {
+                if (isToday) {
+                    const now = new Date();
+                    slot.status = 'posted';
+                    slot.time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                    slot.active = true;
+                    saveData();
+                    renderTabs();
+                    renderPages();
+                } else {
+                    openScheduleModal(page, dateStr);
+                }
+            } else if (slot.status === 'scheduled' && isToday) {
+                const now = new Date();
+                slot.status = 'posted';
+                slot.time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                saveData();
+                renderTabs();
+                renderPages();
+            } else {
+                if (confirm("Xác nhận hoàn tác trạng thái bài đăng này?")) {
+                    slot.status = 'none';
+                    slot.time = '';
+                    saveData();
+                    renderTabs();
+                    renderPages();
+                }
+            }
+        }
+
+        function openScheduleModal(page, startDate) {
+            document.getElementById('schedPageId').value = page.id;
+            document.getElementById('schedStartDate').value = startDate;
+            document.getElementById('schedModalInfo').innerText = `${page.name} (từ ${formatDisplayDate(startDate)})`;
+            
+            selectQuickDay(1);
+            document.getElementById('scheduleDaysModal').classList.remove('hidden');
+            setTimeout(() => document.getElementById('schedConfirmBtn').focus(), 50);
+        }
+
+        function closeScheduleModal() {
+            document.getElementById('scheduleDaysModal').classList.add('hidden');
+        }
+
+        function selectQuickDay(num) {
+            document.getElementById('schedDaysInput').value = num;
+            highlightQuickBtn(num);
+        }
+
+        function highlightQuickBtn(val) {
+            const num = Number(val);
+            document.querySelectorAll('.quick-day-btn').forEach(btn => {
+                if (Number(btn.dataset.day) === num) {
+                    btn.className = "quick-day-btn bg-blue-600 text-white border border-blue-400 py-1.5 rounded text-xs font-bold transition shadow";
+                } else {
+                    btn.className = "quick-day-btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 py-1.5 rounded text-xs font-bold transition";
+                }
+            });
+        }
+
+        function confirmScheduleDays(e) {
+            e.preventDefault();
+            const pageId = Number(document.getElementById('schedPageId').value);
+            const startDate = document.getElementById('schedStartDate').value;
+            const daysCount = parseInt(document.getElementById('schedDaysInput').value, 10);
+
+            const page = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
+            if (!page || !startDate || daysCount < 1) return;
+
+            for (let i = 0; i < daysCount; i++) {
+                const targetDate = addDays(startDate, i);
+                const daySlot = getPageDaySlot(page, targetDate);
+                daySlot.active = true;
+                daySlot.status = 'scheduled';
+            }
+
+            saveData();
+            closeScheduleModal();
+            renderTabs();
+            renderPages();
+        }
+
+        function turnSlotIntoEmpty(index) {
+            if (confirm("Chuyển ô này thành khoảng trống?")) {
+                appData.slots[index] = createEmptySlot();
+                saveData();
+                renderTabs();
+                renderPages();
+            }
+        }
+
+        function removeEmptySlot(index) {
+            appData.slots.splice(index, 1);
+            saveData();
+            renderPages();
+        }
+
+        function fillEmptySlot(index) {
+            const name = prompt("Nhập tên Fanpage cho ô này:");
+            if (name && name.trim() !== "") {
+                appData.slots[index] = {
+                    id: Date.now(),
+                    name: name.trim(),
+                    defaultTimes: ['19:30'],
+                    defaultActives: [true],
+                    schedule: {}
+                };
+                saveData();
+                renderPages();
+            }
+        }
+
+        function editPageName(pageId) {
+            let targetPage = appData.slots.find(p => !isSlotEmpty(p) && p.id === pageId);
+            if (!targetPage) return;
+
+            const newName = prompt("Nhập tên mới cho Fanpage:", targetPage.name);
+            if (newName && newName.trim() !== "") {
+                targetPage.name = newName.trim();
+                saveData();
+                renderPages();
+            }
+        }
+
+        function updateExpectedTime(pageId, newTime) {
+            appData.slots.forEach(p => {
+                if (!isSlotEmpty(p) && p.id === pageId) {
+                    if (!p.defaultTimes) p.defaultTimes = ['19:30'];
+                    p.defaultTimes[0] = newTime;
+
+                    if (p.schedule) {
+                        Object.keys(p.schedule).forEach(dKey => {
+                            if (dKey >= currentSelectedDate && p.schedule[dKey][0]) {
+                                p.schedule[dKey][0].expected = newTime;
+                            }
+                        });
+                    }
+                    saveData();
+                }
+            });
+            autoUpdateScheduledToPosted();
+            renderPages();
+        }
+
+        function deletePage(pageId) {
+            if (confirm("Xóa hẳn Page này khỏi danh sách?")) {
+                appData.slots = appData.slots.map(p => (!isSlotEmpty(p) && p.id === pageId) ? createEmptySlot() : p);
+                saveData();
+                renderTabs();
+                renderPages();
+            }
+        }
+
+        function openAddModal() { document.getElementById('addModal').classList.remove('hidden'); }
+        function closeAddModal() { document.getElementById('addModal').classList.add('hidden'); }
+
+        function addPage(e) {
+            e.preventDefault();
+            const name = document.getElementById('newPageName').value;
+            const time1 = document.getElementById('newTime1').value;
+
+            const emptyIndex = appData.slots.findIndex(s => isSlotEmpty(s));
+            const newPageObj = {
+                id: Date.now(),
+                name: name,
+                defaultTimes: [time1],
+                defaultActives: [true],
+                schedule: {}
+            };
+
+            if (emptyIndex !== -1) {
+                appData.slots[emptyIndex] = newPageObj;
+            } else {
+                appData.slots.push(newPageObj);
+            }
+
+            saveData();
+            renderPages();
+            closeAddModal();
+            document.getElementById('newPageName').value = '';
+        }
+
+        function exportJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appData, null, 2));
+            const dlAnchorElem = document.createElement('a');
+            dlAnchorElem.setAttribute("href", dataStr);
+            dlAnchorElem.setAttribute("download", `fb_schedule_${getTodayStr()}.json`);
+            document.body.appendChild(dlAnchorElem);
+            dlAnchorElem.click();
+            dlAnchorElem.remove();
+        }
+
+        function importJSON(event) {
+            const fileReader = new FileReader();
+            if (event.target.files[0]) {
+                fileReader.readAsText(event.target.files[0], "UTF-8");
+                fileReader.onload = (e) => {
+                    try {
+                        const parsed = JSON.parse(e.target.result);
+                        if (parsed && (parsed.slots || parsed.pages)) {
+                            if (parsed.pages && !parsed.slots) {
+                                parsed.slots = parsed.pages;
+                            }
+                            appData = parsed;
+                            migrateAndCleanData(false);
+                            saveData();
+                            renderTabs();
+                            renderPages();
+                            alert("Khôi phục dữ liệu từ file JSON và đồng bộ Cloud thành công!");
+                        } else {
+                            alert("File JSON không đúng định dạng!");
+                        }
+                    } catch (error) {
+                        alert("Lỗi đọc file JSON!");
+                    }
+                };
+            }
+            event.target.value = '';
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        // --- LẮNG NGHE DỮ LIỆU REALTIME TỪ FIREBASE ---
+        updateHeaderDate();
+
+        dbRef.on('value', (snapshot) => {
+            const cloudData = snapshot.val();
+            setSyncBadge('online', '🟢 Đã đồng bộ Cloud');
+
+            if (cloudData && (cloudData.slots || cloudData.pages)) {
+                if (cloudData.pages && !cloudData.slots) {
+                    cloudData.slots = cloudData.pages;
+                }
+                appData = cloudData;
+                migrateAndCleanData(true);
+                renderTabs();
+                renderPages();
+            } else if (!isInitialLoadDone) {
+                const localSaved = localStorage.getItem(LOCAL_BACKUP_KEY);
+                if (localSaved) {
+                    try {
+                        appData = JSON.parse(localSaved);
+                    } catch (e) {}
+                }
+                migrateAndCleanData(false);
+                saveData();
+                renderTabs();
+                renderPages();
+            }
+            isInitialLoadDone = true;
+        }, (error) => {
+            setSyncBadge('error', '🔴 Mất kết nối Cloud');
+            console.error(error);
+        });
+
+        // Tự động kiểm tra mỗi 30 giây
+        let lastCheckedDate = getTodayStr();
+        setInterval(() => {
+            const currentToday = getTodayStr();
+            if (currentToday !== lastCheckedDate) {
+                lastCheckedDate = currentToday;
+                currentSelectedDate = currentToday;
+                migrateAndCleanData(true);
+                updateHeaderDate();
+                renderTabs();
+                renderPages();
+            } else if (autoUpdateScheduledToPosted()) {
+                renderTabs();
+                renderPages();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
