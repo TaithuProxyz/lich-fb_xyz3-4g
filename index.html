@@ -133,7 +133,7 @@
 
     <!-- Modal Chọn Số Ngày Khi Bấm Lên Lịch -->
     <div id="scheduleDaysModal" class="fixed inset-0 bg-black/75 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-slate-900 border-2 border-blue-500 rounded-xl p-3.5 w-full max-w-[270px] shadow-2xl">
+        <div class="bg-slate-900 border-2 border-blue-500 rounded-xl p-3.5 w-full max-w-[300px] shadow-2xl">
             <h3 class="text-xs font-bold text-white mb-0.5">🚀 Lên Lịch Bài Đăng</h3>
             <p id="schedModalInfo" class="text-[11px] text-blue-400 font-semibold mb-3 truncate"></p>
             
@@ -158,9 +158,11 @@
                     <span class="text-[11px] text-slate-400">ngày</span>
                 </div>
 
-                <div class="flex justify-end gap-1.5 pt-1 border-t border-slate-800">
-                    <button type="button" onclick="closeScheduleModal()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1 rounded-md text-[11px] font-semibold">Hủy</button>
-                    <button type="submit" id="schedConfirmBtn" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-1 rounded-md text-[11px] font-bold shadow">OK</button>
+                <div class="flex items-stretch gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="closeScheduleModal()" class="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-bold transition">Hủy</button>
+                    <button type="button" id="schedTriStateBtn" onclick="cycleModalTriState()" title="Đổi trạng thái: Tối → Sáng liên kết → Vàng đứt liên kết"
+                        class="flex-1 py-2.5 bg-slate-800 text-slate-500 border border-slate-700 rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center"></button>
+                    <button type="submit" id="schedConfirmBtn" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold shadow transition">OK</button>
                 </div>
             </form>
         </div>
@@ -179,6 +181,7 @@
         let draggedIndex = null;
         let isInitialLoadDone = false;
         let isSavingLocal = false;
+        let modalTriState = 0; // 0: Tối, 1: Sáng (nối liền), 2: Vàng (đứt liên kết)
 
         // Ngắt socket khi ẩn tab / chuyển app để tiết kiệm kết nối & data ngầm
         document.addEventListener('visibilitychange', () => {
@@ -188,6 +191,84 @@
                 db.goOnline();
             }
         });
+
+        function getChainSvg(state, isCard = false) {
+            const s = Number(state) || 0;
+            const sizeClass = isCard ? 'w-7 h-6' : 'w-6 h-6';
+            if (s === 2) {
+                // Trạng thái 3: Vàng + 2 mắt xích đứt rời kèm tia vỡ ở điểm đứt
+                return `
+                    <svg viewBox="0 0 32 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="${sizeClass}">
+                        <path d="M12.5 8.5H8.5A4.5 4.5 0 0 0 8.5 17.5H12.5"></path>
+                        <path d="M19.5 8.5H23.5A4.5 4.5 0 0 1 23.5 17.5H19.5"></path>
+                        <path d="M16 4.2V6.4"></path>
+                        <path d="M12.3 5.3L13.7 7.1"></path>
+                        <path d="M19.7 5.3L18.3 7.1"></path>
+                        <path d="M16 17.6V19.8"></path>
+                        <path d="M12.8 18.7L14.1 16.9"></path>
+                        <path d="M19.2 18.7L17.9 16.9"></path>
+                    </svg>
+                `;
+            }
+            // Trạng thái 1 (Tối) & Trạng thái 2 (Sáng tím hồng): giữ nguyên kiểu mắt xích chéo cũ
+            return `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="${sizeClass}">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+            `;
+        }
+
+        function getTriStateMeta(state) {
+            const s = Number(state) || 0;
+            if (s === 1) {
+                return {
+                    next: 2,
+                    btnClass: 'bg-fuchsia-500/25 hover:bg-fuchsia-500/35 text-fuchsia-300 border border-fuchsia-400 shadow-sm shadow-fuchsia-500/30',
+                    cardBadgeClass: 'bg-fuchsia-500/25 text-fuchsia-300 border border-fuchsia-400/80'
+                };
+            }
+            if (s === 2) {
+                return {
+                    next: 0,
+                    btnClass: 'bg-amber-500/25 hover:bg-amber-500/35 text-amber-300 border border-amber-400 shadow-sm shadow-amber-500/30',
+                    cardBadgeClass: 'bg-amber-500/25 text-amber-300 border border-amber-400/80'
+                };
+            }
+            return {
+                next: 1,
+                btnClass: 'bg-slate-800/90 hover:bg-slate-700 text-slate-500 border border-slate-700',
+                cardBadgeClass: 'bg-slate-900/95 text-slate-500 border border-slate-700/90'
+            };
+        }
+
+        function applyTriStateBtnUI(state) {
+            modalTriState = Number(state) || 0;
+            const btn = document.getElementById('schedTriStateBtn');
+            if (!btn) return;
+            const meta = getTriStateMeta(modalTriState);
+            btn.className = `flex-1 py-2.5 ${meta.btnClass} rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center`;
+            btn.innerHTML = getChainSvg(modalTriState, false);
+        }
+
+        function cycleModalTriState() {
+            const meta = getTriStateMeta(modalTriState);
+            applyTriStateBtnUI(meta.next);
+        }
+
+        function cycleCardTriState(e, pageId, dateStr) {
+            e.stopPropagation();
+            const pageIndex = appData.slots.findIndex(p => !isSlotEmpty(p) && p.id === pageId);
+            if (pageIndex === -1) return;
+            const page = appData.slots[pageIndex];
+            const slot = ensurePageDaySlot(page, dateStr);
+            const nextState = getTriStateMeta(slot.flagState || 0).next;
+            slot.flagState = nextState;
+            patchCloud({
+                [`slots/${pageIndex}/schedule/${dateStr}/0/flagState`]: nextState
+            });
+            renderPages();
+        }
 
         function isSlotEmpty(slot) {
             return slot === null || slot === undefined || slot.isEmpty === true;
@@ -296,7 +377,8 @@
                                 cleanSchedule[dKey] = [{
                                     status: item.status,
                                     expected: item.expected || (s.defaultTimes && s.defaultTimes[0]) || '19:30',
-                                    time: item.time || ''
+                                    time: item.time || '',
+                                    flagState: Number(item.flagState) || 0
                                 }];
                             }
                         }
@@ -366,7 +448,8 @@
                     updates[`slots/${idx}/schedule/${todayStr}/0`] = {
                         status: 'posted',
                         expected: tSlot.expected,
-                        time: tSlot.expected
+                        time: tSlot.expected,
+                        flagState: Number(tSlot.flagState) || 0
                     };
                 }
             });
@@ -438,14 +521,14 @@
             if (page.schedule && page.schedule[dateStr] && page.schedule[dateStr][0]) {
                 return page.schedule[dateStr][0];
             }
-            return { status: 'none', expected: t1, time: '' };
+            return { status: 'none', expected: t1, time: '', flagState: 0 };
         }
 
         function ensurePageDaySlot(page, dateStr) {
             if (!page.schedule) page.schedule = {};
             if (!page.schedule[dateStr] || !page.schedule[dateStr][0]) {
                 const t1 = (page.defaultTimes && page.defaultTimes[0]) || '19:30';
-                page.schedule[dateStr] = [{ status: 'none', expected: t1, time: '' }];
+                page.schedule[dateStr] = [{ status: 'none', expected: t1, time: '', flagState: 0 }];
             }
             return page.schedule[dateStr][0];
         }
@@ -883,14 +966,23 @@
                         labelColor = 'text-emerald-200 font-bold';
                     }
 
+                    const triState = Number(slot.flagState) || 0;
+                    const triMeta = getTriStateMeta(triState);
+                    const flagPillHtml = (slot.status && slot.status !== 'none')
+                        ? `<button type="button" onclick="cycleCardTriState(event, ${p.id}, '${currentSelectedDate}')" title="Đổi trạng thái liên kết: Tối → Sáng liên kết → Vàng đứt liên kết" class="${triMeta.cardBadgeClass} px-3 py-2 rounded-md leading-none shrink-0 cursor-pointer transition flex items-center justify-center">${getChainSvg(triState, true)}</button>`
+                        : '';
+
                     const slotHtml = `
                         <div class="${bgBox} rounded p-1.5 flex flex-col gap-1.5 transition-all duration-200">
                             <input type="time" value="${slot.expected}" step="60" onchange="updateExpectedTime(${p.id}, this.value)" 
                                 class="w-full bg-darkBg border border-slate-700 rounded px-2 py-1.5 text-sm text-white text-center focus:outline-none focus:border-red-400 font-mono font-extrabold tracking-wider">
 
-                            <div onclick="toggleSlotStatus(${p.id}, '${currentSelectedDate}')" class="clickable-box w-full py-3 px-1.5 bg-darkBg/50 hover:bg-darkBg/90 rounded border border-slate-800 flex items-center justify-center gap-1.5">
-                                <span class="text-base transition-all duration-200 shrink-0 ${bulbClass}">💡</span>
-                                <span class="text-[11px] font-mono leading-tight ${labelColor} whitespace-nowrap">${statusText}</span>
+                            <div class="w-full bg-darkBg/50 rounded border border-slate-800 flex items-center justify-between pl-1 pr-0.5 py-0.5 gap-0.5 overflow-hidden">
+                                <div onclick="toggleSlotStatus(${p.id}, '${currentSelectedDate}')" class="clickable-box flex-1 py-2 pr-0.5 hover:bg-darkBg/80 rounded flex items-center justify-start gap-0.5 min-w-0">
+                                    <span class="text-base transition-all duration-200 shrink-0 ${bulbClass}">💡</span>
+                                    <span class="text-[11px] font-mono leading-tight ${labelColor} whitespace-nowrap">${statusText}</span>
+                                </div>
+                                ${flagPillHtml}
                             </div>
                         </div>
                     `;
@@ -935,11 +1027,13 @@
                     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
                     slot.status = 'posted';
                     slot.time = timeStr;
+                    slot.flagState = Number(slot.flagState) || 0;
                     patchCloud({
                         [`slots/${pageIndex}/schedule/${dateStr}/0`]: {
                             status: 'posted',
                             expected: slot.expected,
-                            time: timeStr
+                            time: timeStr,
+                            flagState: slot.flagState
                         }
                     });
                     renderTabs();
@@ -953,11 +1047,13 @@
                 const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
                 slot.status = 'posted';
                 slot.time = timeStr;
+                slot.flagState = Number(slot.flagState) || 0;
                 patchCloud({
                     [`slots/${pageIndex}/schedule/${dateStr}/0`]: {
                         status: 'posted',
                         expected: slot.expected,
-                        time: timeStr
+                        time: timeStr,
+                        flagState: slot.flagState
                     }
                 });
                 renderTabs();
@@ -982,6 +1078,7 @@
             document.getElementById('schedModalInfo').innerText = `${page.name} (từ ${formatDisplayDate(startDate)})`;
             
             selectQuickDay(1);
+            applyTriStateBtnUI(0);
             document.getElementById('scheduleDaysModal').classList.remove('hidden');
             setTimeout(() => document.getElementById('schedConfirmBtn').focus(), 50);
         }
@@ -1021,10 +1118,12 @@
                 const targetDate = addDays(startDate, i);
                 const daySlot = ensurePageDaySlot(page, targetDate);
                 daySlot.status = 'scheduled';
+                daySlot.flagState = modalTriState;
                 updates[`slots/${pageIndex}/schedule/${targetDate}/0`] = {
                     status: 'scheduled',
                     expected: daySlot.expected,
-                    time: ''
+                    time: '',
+                    flagState: modalTriState
                 };
             }
 
