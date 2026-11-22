@@ -59,7 +59,7 @@
 <body class="bg-darkBg text-slate-100 min-h-screen font-sans antialiased p-2 sm:p-3">
     <div id="mainContainer" class="w-full max-w-[740px] px-2 mx-auto transition-all duration-200">
         <!-- Header -->
-        <div class="flex flex-row justify-between items-center mb-2.5 pb-2 border-b border-slate-700 gap-2">
+        <div class="flex flex-row justify-between items-center mb-1.5 pb-2 border-b border-slate-700 gap-2">
             <div>
                 <h1 class="text-sm font-bold tracking-wide text-white flex items-center gap-1.5">
                     💡 Quản Lý Lịch Đăng Page Facebook
@@ -86,8 +86,8 @@
             </div>
         </div>
 
-        <!-- Thanh Tab Động Nhiều Ngày -->
-        <div id="tabsContainer" class="flex items-center border-b border-slate-700 mb-2.5 gap-1.5 overflow-x-auto no-scrollbar pb-0.5"></div>
+        <!-- Thanh Tab Động Nhiều Ngày (Ghim cố định khi cuộn trang) -->
+        <div id="tabsContainer" class="sticky top-0 z-30 bg-darkBg/95 backdrop-blur-sm flex items-center border-b border-slate-700 mb-2.5 pt-1.5 pb-1 -mx-2 px-2 gap-1.5 overflow-x-auto no-scrollbar"></div>
 
         <!-- Vùng Bảng có nút Thêm/Bớt Hàng ở rìa trái & Cột ở rìa trên -->
         <div id="gridWrapper" class="relative pt-5 pl-5">
