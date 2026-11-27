@@ -4,7 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Kho Link Affiliate</title>
+    <link rel="manifest" href="./manifest-links.json">
+    <meta name="theme-color" content="#090d16">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Kho Link">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="apple-touch-icon" href="./icon.png?v=3">
+    <link rel="icon" type="image/png" href="./icon.png?v=3">
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -29,6 +40,7 @@
             <div class="flex items-center justify-between gap-2 mb-2">
                 <div class="flex items-center gap-1.5 min-w-0">
                     <h1 class="text-sm sm:text-base font-bold text-white truncate">🔗 Kho Link Affiliate</h1>
+                    <span id="syncStatus" class="text-[10px] font-normal px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700 shrink-0">⏳ Đang kết nối...</span>
                     <span id="itemCount" class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-800 text-blue-400 border border-slate-700 shrink-0">0 SP</span>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
@@ -129,43 +141,106 @@
     </div>
 
     <script>
+        const firebaseConfig = {
+            databaseURL: "https://lich-dang-fb-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        const dbRef = db.ref('affiliate_links_data');
+
         const STORAGE_KEY = 'affiliate_links_v3';
+        let isInitialLoadDone = false;
+        let isSavingLocal = false;
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                db.goOffline();
+            } else {
+                db.goOnline();
+            }
+        });
+
+        function setSyncBadge(status, text) {
+            const el = document.getElementById('syncStatus');
+            if (!el) return;
+            if (status === 'online') {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 shrink-0";
+            } else if (status === 'saving') {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-400 border border-blue-700/60 shrink-0";
+            } else {
+                el.className = "text-[10px] font-normal px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-700/60 shrink-0";
+            }
+            el.innerText = text;
+        }
+
         let store = {
             tabs: ['Chó mèo', 'Điện'],
             activeTab: 'Chó mèo',
             products: []
         };
 
-        function loadStore() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('affiliate_links_v2');
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) {
-                        store.products = parsed.map(p => ({ ...p, tab: p.tab || store.tabs[0] }));
-                    } else if (parsed && typeof parsed === 'object') {
-                        store.tabs = Array.isArray(parsed.tabs) && parsed.tabs.length ? parsed.tabs : ['Chó mèo', 'Điện'];
-                        store.products = Array.isArray(parsed.products) ? parsed.products : [];
-                        if (parsed.activeTab && store.tabs.includes(parsed.activeTab)) {
-                            store.activeTab = parsed.activeTab;
-                        } else {
-                            store.activeTab = store.tabs[0];
-                        }
-                    }
-                }
-            } catch (e) {
-                store = { tabs: ['Chó mèo', 'Điện'], activeTab: 'Chó mèo', products: [] };
+        function normalizeStore(parsed) {
+            const fallbackTabs = ['Chó mèo', 'Điện'];
+            if (Array.isArray(parsed)) {
+                const prods = parsed.map(p => ({
+                    ...p,
+                    tab: p.tab || fallbackTabs[0],
+                    links: Array.isArray(p.links) ? p.links.map(l => typeof l === 'string' ? l : (l.url || '')) : ['']
+                }));
+                return { tabs: fallbackTabs, activeTab: fallbackTabs[0], products: prods };
             }
+            if (parsed && typeof parsed === 'object') {
+                const tabs = Array.isArray(parsed.tabs) && parsed.tabs.length ? parsed.tabs : fallbackTabs;
+                const rawProds = Array.isArray(parsed.products)
+                    ? parsed.products
+                    : (parsed.products && typeof parsed.products === 'object' ? Object.values(parsed.products) : []);
+                const products = rawProds.map(p => ({
+                    id: p.id || String(Date.now() + Math.random()),
+                    name: p.name || '',
+                    tab: tabs.includes(p.tab) ? p.tab : tabs[0],
+                    links: Array.isArray(p.links)
+                        ? p.links.map(l => typeof l === 'string' ? l : (l.url || ''))
+                        : (p.links && typeof p.links === 'object' ? Object.values(p.links).map(l => typeof l === 'string' ? l : (l.url || '')) : [''])
+                }));
+                const activeTab = (parsed.activeTab && tabs.includes(parsed.activeTab)) ? parsed.activeTab : tabs[0];
+                return { tabs, activeTab, products };
+            }
+            return { tabs: fallbackTabs, activeTab: fallbackTabs[0], products: [] };
         }
 
         function saveToStorage() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
         }
 
+        function syncCloud(updatesObj = null) {
+            saveToStorage();
+            isSavingLocal = true;
+            setSyncBadge('saving', '🔄 Đang lưu...');
+
+            const req = updatesObj
+                ? dbRef.update(updatesObj)
+                : dbRef.set({
+                    tabs: store.tabs,
+                    activeTab: store.activeTab,
+                    products: store.products
+                });
+
+            req.then(() => setSyncBadge('online', '🟢 Đã đồng bộ Cloud'))
+                .catch(() => setSyncBadge('error', '🔴 Lỗi mạng'))
+                .finally(() => {
+                    setTimeout(() => { isSavingLocal = false; }, 250);
+                });
+        }
+
+        function isEditingInlineInput() {
+            const active = document.activeElement;
+            return active && active.classList && active.classList.contains('link-tail-input');
+        }
+
         function switchTab(tabName) {
             if (!store.tabs.includes(tabName)) return;
             store.activeTab = tabName;
-            saveToStorage();
+            syncCloud({ activeTab: store.activeTab });
             renderTabs();
             renderList();
         }
@@ -242,7 +317,7 @@
                 store.tabs.push(name);
             }
             store.activeTab = name;
-            saveToStorage();
+            syncCloud();
             input.value = '';
             renderTabs();
             renderManageTabsList();
@@ -269,7 +344,7 @@
             if (store.activeTab === tabName) {
                 store.activeTab = fallbackTab;
             }
-            saveToStorage();
+            syncCloud();
             renderTabs();
             renderManageTabsList();
             renderList();
@@ -282,7 +357,6 @@
             input.focus();
         }
 
-        // Luôn cuộn ô input link về cuối để thấy đuôi link
         function scrollInputToEnd(el) {
             if (!el) return;
             requestAnimationFrame(() => {
@@ -297,11 +371,12 @@
         }
 
         function addInlineLink(productId) {
-            const prod = store.products.find(p => String(p.id) === String(productId));
-            if (!prod) return;
+            const prodIdx = store.products.findIndex(p => String(p.id) === String(productId));
+            if (prodIdx === -1) return;
+            const prod = store.products[prodIdx];
             if (!Array.isArray(prod.links)) prod.links = [];
             prod.links.push('');
-            saveToStorage();
+            syncCloud({ [`products/${prodIdx}/links`]: prod.links });
             renderList();
             const newIdx = prod.links.length - 1;
             setTimeout(() => {
@@ -311,22 +386,34 @@
         }
 
         function updateInlineLink(productId, linkIdx, newVal, inputEl) {
-            const prod = store.products.find(p => String(p.id) === String(productId));
-            if (!prod || !Array.isArray(prod.links)) return;
-            prod.links[linkIdx] = newVal.trim();
-            saveToStorage();
+            const prodIdx = store.products.findIndex(p => String(p.id) === String(productId));
+            if (prodIdx === -1) return;
+            const prod = store.products[prodIdx];
+            if (!Array.isArray(prod.links)) return;
+            const trimmed = newVal.trim();
+            prod.links[linkIdx] = trimmed;
+            syncCloud({ [`products/${prodIdx}/links/${linkIdx}`]: trimmed });
             scrollInputToEnd(inputEl);
         }
 
         function removeInlineLink(productId, linkIdx) {
-            const prod = store.products.find(p => String(p.id) === String(productId));
-            if (!prod || !Array.isArray(prod.links)) return;
+            const prodIdx = store.products.findIndex(p => String(p.id) === String(productId));
+            if (prodIdx === -1) return;
+            const prod = store.products[prodIdx];
+            if (!Array.isArray(prod.links)) return;
+
+            const currentUrl = (prod.links[linkIdx] || '').trim();
+            const msg = currentUrl
+                ? `Xóa link này?\n${currentUrl}`
+                : 'Xóa ô link này?';
+            if (!confirm(msg)) return;
+
             if (prod.links.length <= 1) {
                 prod.links[0] = '';
             } else {
                 prod.links.splice(linkIdx, 1);
             }
-            saveToStorage();
+            syncCloud({ [`products/${prodIdx}/links`]: prod.links });
             renderList();
         }
 
@@ -387,22 +474,22 @@
                 const linksHtml = rawLinks.map((url, lIdx) => {
                     const inputId = `inline-input-${p.id}-${lIdx}`;
                     const copyId = `copy-btn-${p.id}-${lIdx}`;
-                    const canRemove = rawLinks.length > 1;
+                    const canRemove = rawLinks.length > 1 || url.trim().length > 0;
 
                     return `
                         <div class="flex items-center gap-1.5 bg-darkBg/95 border border-slate-800 rounded-lg p-1.5 min-w-0">
+                            ${canRemove ? `
+                                <button type="button" onclick="removeInlineLink('${p.id}', ${lIdx})"
+                                    title="Xóa link này"
+                                    class="shrink-0 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 px-1.5 py-1 rounded text-xs font-bold transition leading-none">
+                                    ✕
+                                </button>
+                            ` : ''}
                             <input id="${inputId}" type="text" value="${escapeAttr(url)}"
                                 placeholder="Dán/sửa link..."
                                 onchange="updateInlineLink('${p.id}', ${lIdx}, this.value, this)"
                                 onblur="scrollInputToEnd(this)"
                                 class="link-tail-input flex-1 min-w-0 bg-transparent text-xs font-mono text-slate-200 focus:text-white focus:bg-slate-900 focus:outline-none rounded px-1.5 py-1">
-                            ${canRemove ? `
-                                <button type="button" onclick="removeInlineLink('${p.id}', ${lIdx})"
-                                    title="Bớt link này"
-                                    class="shrink-0 text-slate-500 hover:text-rose-400 px-1.5 py-1 rounded text-xs font-bold transition leading-none">
-                                    ✕
-                                </button>
-                            ` : ''}
                             <button id="${copyId}" type="button"
                                 onclick="copyInlineInput(this, '${inputId}')"
                                 class="shrink-0 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white px-4 py-1.5 rounded-md text-xs font-bold transition leading-none shadow">
@@ -484,11 +571,11 @@
             const row = document.createElement('div');
             row.className = 'link-row flex items-center gap-1.5';
             row.innerHTML = `
-                <input type="text" value="${escapeAttr(url)}" placeholder="Nhập hoặc dán link..."
-                    class="link-url flex-1 min-w-0 bg-darkBg border border-slate-700 focus:border-blue-500 rounded-lg px-2.5 py-2 text-xs font-mono text-white focus:outline-none">
                 <button type="button" onclick="removeLinkRow(this)" class="bg-slate-800 hover:bg-rose-950 text-rose-400 px-2.5 py-2 rounded-lg text-xs font-bold transition shrink-0" title="Xóa ô link">
                     ✕
                 </button>
+                <input type="text" value="${escapeAttr(url)}" placeholder="Nhập hoặc dán link..."
+                    class="link-url flex-1 min-w-0 bg-darkBg border border-slate-700 focus:border-blue-500 rounded-lg px-2.5 py-2 text-xs font-mono text-white focus:outline-none">
             `;
             container.appendChild(row);
         }
@@ -499,6 +586,9 @@
                 alert('Cần ít nhất 1 ô link.');
                 return;
             }
+            const inputEl = btn.closest('.link-row').querySelector('.link-url');
+            const val = inputEl ? inputEl.value.trim() : '';
+            if (val && !confirm(`Xóa ô link này?\n${val}`)) return;
             btn.closest('.link-row').remove();
         }
 
@@ -575,7 +665,7 @@
             }
 
             store.activeTab = tab;
-            saveToStorage();
+            syncCloud();
             closeProductModal();
             renderTabs();
             renderList();
@@ -584,7 +674,7 @@
         function deleteProduct(productId) {
             if (!confirm('Xóa sản phẩm này?')) return;
             store.products = store.products.filter(item => String(item.id) !== String(productId));
-            saveToStorage();
+            syncCloud();
             renderTabs();
             renderList();
         }
@@ -609,22 +699,11 @@
             reader.onload = (e) => {
                 try {
                     const parsed = JSON.parse(e.target.result);
-                    if (Array.isArray(parsed)) {
-                        store.products = parsed;
-                    } else if (parsed && Array.isArray(parsed.products)) {
-                        store.tabs = Array.isArray(parsed.tabs) && parsed.tabs.length ? parsed.tabs : store.tabs;
-                        store.products = parsed.products;
-                        if (!store.tabs.includes(store.activeTab)) {
-                            store.activeTab = store.tabs[0];
-                        }
-                    } else {
-                        alert('File JSON không đúng định dạng.');
-                        return;
-                    }
-                    saveToStorage();
+                    store = normalizeStore(parsed);
+                    syncCloud();
                     renderTabs();
                     renderList();
-                    alert('Đã nhập dữ liệu thành công.');
+                    alert('Đã nhập và đồng bộ Cloud thành công.');
                 } catch (err) {
                     alert('Không thể đọc file JSON.');
                 }
@@ -656,9 +735,31 @@
                 .replace(/"/g, '&quot;');
         }
 
-        loadStore();
-        renderTabs();
-        renderList();
+        dbRef.on('value', (snapshot) => {
+            if (isSavingLocal || isEditingInlineInput()) return;
+
+            const cloudData = snapshot.val();
+            setSyncBadge('online', '🟢 Đã đồng bộ Cloud');
+
+            if (cloudData) {
+                store = normalizeStore(cloudData);
+                saveToStorage();
+                renderTabs();
+                renderList();
+            } else if (!isInitialLoadDone) {
+                const localSaved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('affiliate_links_v2');
+                if (localSaved) {
+                    try { store = normalizeStore(JSON.parse(localSaved)); } catch (e) {}
+                }
+                syncCloud();
+                renderTabs();
+                renderList();
+            }
+            isInitialLoadDone = true;
+        }, (error) => {
+            setSyncBadge('error', '🔴 Mất kết nối Cloud');
+            console.error(error);
+        });
     </script>
 </body>
 </html>
