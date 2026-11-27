@@ -121,12 +121,12 @@
     <div id="tabModal" class="fixed inset-0 bg-black/80 hidden flex items-center justify-center p-4 z-50" onclick="closeTabModal()">
         <div class="bg-slate-900 border-2 border-slate-700 rounded-2xl p-3.5 w-full max-w-xs shadow-2xl" onclick="event.stopPropagation()">
             <div class="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
-                <h2 class="text-xs font-bold text-white">🗂️ Thêm Tab Mới</h2>
+                <h2 class="text-xs font-bold text-white">🗂️ Quản Lý Tab</h2>
                 <button onclick="closeTabModal()" class="text-slate-400 hover:text-white text-xs px-1">✕</button>
             </div>
 
             <form onsubmit="addNewTab(event)" class="flex gap-1.5 mb-3">
-                <input id="newTabName" type="text" required placeholder="VD: Chó mèo, Điện..."
+                <input id="newTabName" type="text" required placeholder="Tên tab mới..."
                     class="flex-1 bg-darkBg border border-slate-700 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none">
                 <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0">
                     Thêm
@@ -135,12 +135,13 @@
 
             <div class="border-t border-slate-800 pt-2">
                 <div class="text-[10px] text-slate-400 mb-1.5 font-semibold">Các tab hiện có:</div>
-                <div id="manageTabsList" class="flex flex-col gap-1.5 max-h-44 overflow-y-auto"></div>
+                <div id="manageTabsList" class="flex flex-col gap-1.5 max-h-48 overflow-y-auto"></div>
             </div>
         </div>
     </div>
 
     <script>
+        // --- CẤU HÌNH FIREBASE REALTIME DATABASE ---
         const firebaseConfig = {
             databaseURL: "https://lich-dang-fb-default-rtdb.asia-southeast1.firebasedatabase.app/"
         };
@@ -275,7 +276,7 @@
             html += `
                 <button type="button" onclick="openTabModal()"
                     class="px-3 py-1.5 rounded-lg text-xs font-bold leading-none bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-dashed border-emerald-500/60 transition flex items-center gap-1"
-                    title="Thêm hoặc xóa tab">
+                    title="Thêm, sửa hoặc xóa tab">
                     + Tab
                 </button>
             `;
@@ -297,12 +298,15 @@
         function renderManageTabsList() {
             const box = document.getElementById('manageTabsList');
             box.innerHTML = store.tabs.map(t => `
-                <div class="flex items-center justify-between bg-darkBg/90 border border-slate-800 rounded-lg px-2.5 py-1.5">
-                    <span class="text-xs font-semibold text-slate-200 truncate">${escapeHtml(t)}</span>
-                    ${store.tabs.length > 1
-                        ? `<button type="button" onclick="deleteTab('${escapeJs(t)}')" class="text-[11px] text-rose-400 hover:text-rose-300 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 shrink-0">Xóa</button>`
-                        : `<span class="text-[10px] text-slate-500">Mặc định</span>`
-                    }
+                <div class="flex items-center justify-between gap-1.5 bg-darkBg/90 border border-slate-800 rounded-lg px-2.5 py-1.5">
+                    <span class="text-xs font-semibold text-slate-200 truncate flex-1">${escapeHtml(t)}</span>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button type="button" onclick="renameTab('${escapeJs(t)}')" class="text-[11px] text-amber-300 hover:text-amber-200 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 transition">Sửa</button>
+                        ${store.tabs.length > 1
+                            ? `<button type="button" onclick="deleteTab('${escapeJs(t)}')" class="text-[11px] text-rose-400 hover:text-rose-300 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 transition">Xóa</button>`
+                            : `<span class="text-[10px] text-slate-500 px-1">Mặc định</span>`
+                        }
+                    </div>
                 </div>
             `).join('');
         }
@@ -324,18 +328,44 @@
             renderList();
         }
 
+        function renameTab(oldName) {
+            const newName = prompt('Nhập tên mới cho tab:', oldName);
+            if (!newName) return;
+            const trimmed = newName.trim();
+            if (!trimmed || trimmed === oldName) return;
+            if (store.tabs.includes(trimmed)) {
+                alert('Tên tab này đã tồn tại.');
+                return;
+            }
+
+            store.tabs = store.tabs.map(t => (t === oldName ? trimmed : t));
+            store.products.forEach(p => {
+                if (p.tab === oldName) p.tab = trimmed;
+            });
+            if (store.activeTab === oldName) {
+                store.activeTab = trimmed;
+            }
+
+            syncCloud();
+            renderTabs();
+            renderManageTabsList();
+            renderList();
+        }
+
         function deleteTab(tabName) {
             if (store.tabs.length <= 1) {
                 alert('Cần giữ lại ít nhất 1 tab.');
                 return;
             }
-            const hasProducts = store.products.some(p => p.tab === tabName);
             const remainingTabs = store.tabs.filter(t => t !== tabName);
             const fallbackTab = remainingTabs[0];
+            const prodCount = store.products.filter(p => p.tab === tabName).length;
 
-            if (hasProducts && !confirm(`Tab "${tabName}" đang có sản phẩm. Chuyển các SP sang tab "${fallbackTab}" và xóa tab "${tabName}"?`)) {
-                return;
-            }
+            const msg = prodCount > 0
+                ? `Xóa tab "${tabName}"? (${prodCount} sản phẩm bên trong sẽ chuyển sang tab "${fallbackTab}").`
+                : `Xác nhận xóa tab "${tabName}"?`;
+
+            if (!confirm(msg)) return;
 
             store.tabs = remainingTabs;
             store.products.forEach(p => {
